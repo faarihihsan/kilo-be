@@ -1,0 +1,48 @@
+# Throwaway PostgreSQL for the test suite (`make db-up`, `make db-down`).
+#
+# The project name and container name are fixed on purpose: every git worktree
+# shares one server, so `docker compose -f docker-compose.test.yml up -d --wait`
+# is idempotent from any of them. Test databases are created per test by
+# internal/testutil, so parallel test binaries never see each other's rows.
+#
+# Data lives on tmpfs and durability is off: fast, and gone on `db-down`.
+name: workout-tracker-test
+
+services:
+  postgres:
+    # Latest stable major on Docker Hub (19 is still beta). Bump the major here
+    # and in .github/workflows when it changes.
+    image: postgres:18-alpine
+    container_name: workout-tracker-test-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    command:
+      - postgres
+      - -c
+      - fsync=off
+      - -c
+      - synchronous_commit=off
+      - -c
+      - full_page_writes=off
+      # Many test binaries run in parallel, each with its own pools.
+      - -c
+      - max_connections=300
+    ports:
+      # Localhost only, and off the default 5432 so a local Postgres never clashes.
+      - "127.0.0.1:55432:5432"
+    tmpfs:
+      # PG 18+ images keep PGDATA under /var/lib/postgresql/<major>/docker;
+      # older majors under /var/lib/postgresql/data. Mounting the parent covers both.
+      - /var/lib/postgresql
+    stop_signal: SIGINT # fast shutdown
+    healthcheck:
+      # -h 127.0.0.1 matters: during first start the image runs a temporary
+      # server that listens on the unix socket only, so a socket check would
+      # report healthy before the real server is up.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d postgres"]
+      interval: 1s
+      timeout: 3s
+      retries: 60
+      start_period: 2s
