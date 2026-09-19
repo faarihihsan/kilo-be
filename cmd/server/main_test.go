@@ -49,18 +49,6 @@ func TestRunUsageAndHelp(t *testing.T) {
 	}
 }
 
-func TestRunStubbedSubcommandsFailClearly(t *testing.T) {
-	setEnv(t, nil)
-	// admin is implemented by T5; media gc is still T6's stub.
-	for _, args := range [][]string{{"media", "gc"}} {
-		code, _, stderr := runCLI(t, args...)
-		if code != exitError {
-			t.Errorf("%v: exit code = %d, want %d", args, code, exitError)
-		}
-		contains(t, strings.Join(args, " ")+" stderr", stderr, "not implemented yet")
-	}
-}
-
 func TestSubcommandsReportAllConfigProblems(t *testing.T) {
 	setEnv(t, nil) // DATABASE_URL and MEDIA_DIR are required
 	for _, args := range [][]string{{"serve"}, {"migrate", "up"}, {"migrate", "status"}} {
