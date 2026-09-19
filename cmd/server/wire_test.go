@@ -116,8 +116,8 @@ func TestAllRoutesArePresent(t *testing.T) {
 	}
 }
 
-// Without an Authenticator (T1 has not plugged one in) every protected route
-// answers 401 with the challenge header, and the anonymous ones still work.
+// Without credentials every protected route answers 401 with the challenge
+// header, and the anonymous ones still work.
 func TestProtectedRoutesRejectAnonymousRequests(t *testing.T) {
 	a, _ := newTestApp(t)
 	h := a.Handler()
@@ -149,6 +149,10 @@ func TestProtectedRoutesRejectAnonymousRequests(t *testing.T) {
 func TestRoleMatrixAcrossAllRoutes(t *testing.T) {
 	a, _ := newTestApp(t)
 	a.router.Authenticator = fakeAuth
+	// The matrix sends one request per role and route from a single address,
+	// more than the per-IP burst of the rate-limited routes; the limiter has
+	// its own tests (auth_wiring_test.go).
+	a.router.RateLimit = nil
 	h := a.Handler()
 
 	for _, r := range httpapi.Routes() {

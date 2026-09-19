@@ -18,6 +18,7 @@ package service
 import (
 	"log/slog"
 
+	"workout-tracker-be/internal/auth"
 	"workout-tracker-be/internal/clock"
 	"workout-tracker-be/internal/config"
 	"workout-tracker-be/internal/media"
@@ -33,4 +34,11 @@ type Deps struct {
 	Logger *slog.Logger
 	// Media is the exercise image store (MEDIA_DIR).
 	Media *media.Store
+	// Hasher hashes and verifies passwords (argon2id) under the configured
+	// cost and concurrency cap. Used by login, register, admin change-password
+	// and the admin CLI.
+	Hasher *auth.Hasher
+	// Limiter is the in-memory login brute-force limiter, shared by every
+	// login attempt of the process.
+	Limiter *auth.LoginLimiter
 }

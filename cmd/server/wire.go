@@ -6,10 +6,12 @@ import (
 	"net/http"
 	"os"
 
+	"workout-tracker-be/internal/auth"
 	"workout-tracker-be/internal/clock"
 	"workout-tracker-be/internal/config"
 	"workout-tracker-be/internal/httpapi"
 	"workout-tracker-be/internal/httpapi/handlers"
+	"workout-tracker-be/internal/httpapi/middleware"
 	"workout-tracker-be/internal/media"
 	"workout-tracker-be/internal/service"
 	"workout-tracker-be/internal/store"
@@ -19,7 +21,8 @@ import (
 // and handlers and hands them to the router. Later tasks never change the
 // constructor signatures used here (service.NewX(Deps), handlers.NewX(svc,
 // handlers.Deps), see the seams_test.go files); they fill in the bodies. The
-// only planned edit is T1's: the Authenticator and RateLimit slots in newApp.
+// only planned edit was T1's: the Hasher and Limiter in newServiceDeps and the
+// Authenticator and RateLimit slots in newApp.
 
 // app is the assembled application.
 type app struct {
@@ -34,7 +37,8 @@ type app struct {
 func (a *app) Handler() http.Handler { return httpapi.NewRouter(a.router) }
 
 // newServiceDeps builds the dependencies shared by all services: the real
-// clock and the exercise image store at cfg.MediaDir.
+// clock, the exercise image store at cfg.MediaDir, the argon2id hasher (its
+// dummy hash costs one hash at startup) and the login limiter.
 func newServiceDeps(cfg *config.Config, logger *slog.Logger, db *store.DB) (service.Deps, error) {
 	// In production the media directory is created by the operator and, under
 	// systemd, must exist before the unit starts (deploy/workout-tracker.service).
@@ -53,12 +57,28 @@ func newServiceDeps(cfg *config.Config, logger *slog.Logger, db *store.DB) (serv
 	if err != nil {
 		return service.Deps{}, fmt.Errorf("MEDIA_DIR: %w", err)
 	}
+	hasher, err := auth.NewHasher(auth.HasherConfig{
+		MemoryKiB:     cfg.Argon2MemoryKiB,
+		Time:          cfg.Argon2Time,
+		Parallelism:   cfg.Argon2Parallelism,
+		MaxConcurrent: cfg.Argon2MaxConcurrent,
+	})
+	if err != nil {
+		return service.Deps{}, fmt.Errorf("ARGON2_*: %w", err)
+	}
+	clk := clock.Real{}
 	return service.Deps{
 		DB:     db,
-		Clock:  clock.Real{},
+		Clock:  clk,
 		Config: cfg,
 		Logger: logger,
 		Media:  mediaStore,
+		Hasher: hasher,
+		Limiter: auth.NewLoginLimiter(clk, auth.LoginLimiterConfig{
+			MaxFailsUser: cfg.LoginMaxFailsUser,
+			MaxFailsIP:   cfg.LoginMaxFailsIP,
+			Lock:         cfg.LoginLock,
+		}),
 	}, nil
 }
 
@@ -110,11 +130,17 @@ func newApp(cfg *config.Config, logger *slog.Logger, db *store.DB) (*app, error)
 	return &app{
 		deps: sd,
 		router: httpapi.RouterConfig{
-			Handlers: h,
-			Logger:   logger,
-			// T1: plug auth middleware and rate limiter here.
-			// Authenticator: nil answers 401 on every protected route.
-			// RateLimit:     nil means no limiting.
+			Handlers:      h,
+			Logger:        logger,
+			Authenticator: middleware.NewAuthenticator(store.NewAuthTokens(db), sd.Clock),
+			// Per-IP limit for the routes flagged AuthRateLimited; it also puts
+			// the resolved client IP in the context for the login handler.
+			// Tests that fire many requests from one address at those routes
+			// replace it with nil.
+			RateLimit: middleware.NewRateLimit(middleware.RateLimitConfig{
+				Clock:          sd.Clock,
+				TrustedProxies: cfg.TrustedProxyCIDRs,
+			}),
 		},
 	}, nil
 }

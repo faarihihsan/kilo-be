@@ -33,14 +33,18 @@ func setEnv(t *testing.T, overrides map[string]string) {
 }
 
 // devEnv is a valid development environment for databaseURL, with a private
-// media directory.
+// media directory. The argon2 cost is the configuration minimum: building the
+// app hashes once at startup (the hasher's dummy hash), which takes most of a
+// second at production cost under the race detector.
 func devEnv(t *testing.T, databaseURL string) map[string]string {
 	t.Helper()
 	return map[string]string{
-		"APP_ENV":      "development",
-		"DATABASE_URL": databaseURL,
-		"MEDIA_DIR":    t.TempDir(),
-		"HTTP_ADDR":    "127.0.0.1:0",
+		"APP_ENV":           "development",
+		"DATABASE_URL":      databaseURL,
+		"MEDIA_DIR":         t.TempDir(),
+		"HTTP_ADDR":         "127.0.0.1:0",
+		"ARGON2_MEMORY_KIB": "8192",
+		"ARGON2_TIME":       "1",
 	}
 }
 
