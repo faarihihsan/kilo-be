@@ -51,7 +51,8 @@ func TestAppAuthenticatesWithRealTokens(t *testing.T) {
 	// Admins are for management only.
 	apitest.RequireError(t, authWiringDo(h, http.MethodGet, "/v1/exercises", adminToken), http.StatusForbidden, "forbidden")
 	apitest.RequireError(t, authWiringDo(h, http.MethodPost, "/v1/auth/register", userToken), http.StatusForbidden, "forbidden")
-	apitest.RequireError(t, authWiringDo(h, http.MethodPost, "/v1/auth/register", adminToken), http.StatusNotImplemented, "not_implemented")
+	// T5 implemented register; an empty body is now a 400, not the old 501 stub.
+	apitest.RequireError(t, authWiringDo(h, http.MethodPost, "/v1/auth/register", adminToken), http.StatusBadRequest, "bad_request")
 
 	for name, token := range map[string]string{"none": "", "garbage": "nonsense", "revoked": revoked, "expired": expired} {
 		rec := authWiringDo(h, http.MethodGet, "/v1/exercises", token)
@@ -77,8 +78,8 @@ func TestAppRateLimitsTheAuthRoutesPerIP(t *testing.T) {
 
 	for i := range middleware.RateLimitBurst {
 		rec := authWiringDo(h, http.MethodPost, "/v1/auth/login", "")
-		if rec.Code != http.StatusNotImplemented {
-			t.Fatalf("login request %d: status = %d, want the stub's 501", i+1, rec.Code)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("login request %d: status = %d, want a 400 (empty body)", i+1, rec.Code)
 		}
 	}
 	limited := authWiringDo(h, http.MethodPost, "/v1/auth/login", "")
@@ -88,7 +89,7 @@ func TestAppRateLimitsTheAuthRoutesPerIP(t *testing.T) {
 	}
 	// Other addresses are unaffected; data routes are not limited at all.
 	other := func(r *http.Request) { r.RemoteAddr = "198.51.100.7:1234" }
-	apitest.RequireError(t, authWiringDo(h, http.MethodPost, "/v1/auth/login", "", other), http.StatusNotImplemented, "not_implemented")
+	apitest.RequireError(t, authWiringDo(h, http.MethodPost, "/v1/auth/login", "", other), http.StatusBadRequest, "bad_request")
 	for range 3 * middleware.RateLimitBurst {
 		apitest.RequireError(t, authWiringDo(h, http.MethodGet, "/v1/progress", ""), http.StatusUnauthorized, "unauthorized")
 	}
