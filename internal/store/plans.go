@@ -71,25 +71,9 @@ func planScan(row planScanner, p *domain.Plan, dest ...any) error {
 // two requests insert the same new id at once, the loser fails on the primary
 // key and runs once more, now finding the winner's row.
 func (s *Plans) Save(ctx context.Context, userID, id uuid.UUID, in domain.PlanSpec) (domain.Plan, bool, error) {
-	var (
-		out     domain.Plan
-		created bool
-	)
-	attempt := func() error {
-		return s.db.WithTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
-			var err error
-			out, created, err = planSave(ctx, tx, userID, id, in)
-			return err
-		})
-	}
-	err := attempt()
-	if c, ok := IsUniqueViolation(err); ok && c == "workout_plans_pkey" {
-		err = attempt()
-	}
-	if err != nil {
-		return domain.Plan{}, false, err
-	}
-	return out, created, nil
+	return saveWithRetry(ctx, s.db, "workout_plans_pkey", func(ctx context.Context, tx pgx.Tx) (domain.Plan, bool, error) {
+		return planSave(ctx, tx, userID, id, in)
+	})
 }
 
 func planSave(ctx context.Context, tx pgx.Tx, userID, id uuid.UUID, in domain.PlanSpec) (domain.Plan, bool, error) {
@@ -100,46 +84,17 @@ func planSave(ctx context.Context, tx pgx.Tx, userID, id uuid.UUID, in domain.Pl
 		return domain.Plan{}, false, fmt.Errorf("store: lock user: %w", err)
 	}
 
-	var (
-		owner     uuid.UUID
-		state     domain.SyncState
-		deletedAt *time.Time
-	)
-	err := tx.QueryRow(ctx,
-		`SELECT user_id, client_updated_at, deleted_at FROM workout_plans WHERE id = $1 FOR UPDATE`, id,
-	).Scan(&owner, &state.ClientUpdatedAt, &deletedAt)
-
-	var existing *domain.SyncState
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-	case err != nil:
-		return domain.Plan{}, false, fmt.Errorf("store: lock plan: %w", err)
-	case owner != userID:
-		return domain.Plan{}, false, domain.NewNotFound()
-	default:
-		state.Deleted = deletedAt != nil
-		existing = &state
+	action, err := lockForSync(ctx, tx, "workout_plans", "plan", userID, id, in.UpdatedAt)
+	if err != nil {
+		return domain.Plan{}, false, err
 	}
-
-	action := domain.DecideSync(existing, in.UpdatedAt)
-	switch action {
-	case domain.SyncDeleted:
-		return domain.Plan{}, false, action.Err(nil)
-	case domain.SyncStale:
-		cur, err := planLoad(ctx, tx, "p.id = $1", id)
-		if err != nil {
-			return domain.Plan{}, false, err
-		}
-		return domain.Plan{}, false, action.Err(cur)
-	case domain.SyncNoop:
-		// A retry is answered with the stored copy; its exercises are not
-		// looked at, so a lost response can be retried even if the master
-		// changed in between.
-		cur, err := planLoad(ctx, tx, "p.id = $1", id)
-		if err != nil {
-			return domain.Plan{}, false, err
-		}
-		return cur, false, nil
+	// A retry is answered with the stored copy; its exercises are not looked
+	// at, so a lost response can be retried even if the master changed in
+	// between.
+	if cur, done, err := syncPreflight(action, func() (domain.Plan, error) {
+		return planLoad(ctx, tx, "p.id = $1", id)
+	}); done {
+		return cur, false, err
 	}
 
 	if action == domain.SyncInsert {
@@ -211,23 +166,9 @@ func planCheckExercises(ctx context.Context, q Querier, exercises []domain.PlanE
 	for i, e := range exercises {
 		ids[i] = e.ExerciseID
 	}
-	rows, err := q.Query(ctx, `SELECT id FROM exercises WHERE id = ANY($1)`, ids)
-	if err != nil {
-		return fmt.Errorf("store: check exercises: %w", err)
-	}
-	known, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
-	if err != nil {
-		return fmt.Errorf("store: check exercises: %w", err)
-	}
-	exists := make(map[uuid.UUID]struct{}, len(known))
-	for _, id := range known {
-		exists[id] = struct{}{}
-	}
 	var v domain.ValidationError
-	for i, e := range exercises {
-		if _, ok := exists[e.ExerciseID]; !ok {
-			v.Add(domain.FieldIndex("exercises", i)+".exercise_id", domain.IssueUnknownReference)
-		}
+	if err := addExerciseRefIssues(ctx, q, ids, &v); err != nil {
+		return err
 	}
 	return v.Err()
 }
@@ -283,7 +224,7 @@ func planText(d *domain.PlanDecimal) *string {
 // not exist, is soft-deleted or belongs to another user is NotFound.
 func (s *Plans) Get(ctx context.Context, userID, id uuid.UUID) (domain.Plan, error) {
 	var out domain.Plan
-	err := s.db.WithTxOptions(ctx, planReadOnly, func(ctx context.Context, tx pgx.Tx) error {
+	err := s.db.WithTxOptions(ctx, readOnlyTx, func(ctx context.Context, tx pgx.Tx) error {
 		var err error
 		out, err = planLoad(ctx, tx, "p.id = $1 AND p.user_id = $2 AND p.deleted_at IS NULL", id, userID)
 		return err
@@ -293,10 +234,6 @@ func (s *Plans) Get(ctx context.Context, userID, id uuid.UUID) (domain.Plan, err
 	}
 	return out, nil
 }
-
-// planReadOnly gives a read of a parent row and its children one snapshot, so
-// a concurrent save is seen entirely or not at all.
-var planReadOnly = pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}
 
 // planLoad reads the one plan matching cond (a WHERE condition on p with its
 // args) and its exercises, or returns NotFound.
@@ -418,7 +355,7 @@ func (s *Plans) ListExpanded(ctx context.Context, userID uuid.UUID, p domain.Pla
 		out  []domain.Plan
 		next *string
 	)
-	err = s.db.WithTxOptions(ctx, planReadOnly, func(ctx context.Context, tx pgx.Tx) error {
+	err = s.db.WithTxOptions(ctx, readOnlyTx, func(ctx context.Context, tx pgx.Tx) error {
 		rows, n, err := planPage(ctx, tx, userID, p, nameAfter, syncAfter, limit, false)
 		if err != nil {
 			return err
@@ -501,8 +438,8 @@ func planPage(ctx context.Context, q Querier, userID uuid.UUID, p domain.PlanLis
 	}
 
 	var next *string
-	if len(out) > limit {
-		out = out[:limit]
+	if page, ok := pageOf(out, limit); ok {
+		out = page
 		last := out[limit-1]
 		if p.UpdatedSince != nil {
 			next = planNext(domain.EncodeCursor(domain.Cursor{At: last.plan.ServerUpdatedAt, ID: last.plan.ID}))
@@ -576,14 +513,5 @@ func (s *Plans) SoftDelete(ctx context.Context, userID, id uuid.UUID) error {
 	if tag.RowsAffected() == 1 {
 		return nil
 	}
-	var owned bool
-	err = s.db.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM workout_plans WHERE id = $1 AND user_id = $2)`, id, userID).Scan(&owned)
-	if err != nil {
-		return fmt.Errorf("store: delete plan: %w", err)
-	}
-	if !owned {
-		return domain.NewNotFound()
-	}
-	return nil
+	return softDeleteAnswer(ctx, s.db, "workout_plans", "plan", id, userID)
 }
