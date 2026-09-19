@@ -6,6 +6,7 @@ bin/
 *.out
 .env
 .worktrees/
+.direnv/
 
 # Local development data (make run: exercise images)
 var/
