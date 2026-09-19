@@ -73,6 +73,7 @@ Shared rules (errors, pagination, ids, timestamps, sync): [api/conventions.md](a
 | `api/endpoints/01…21-*.md` | one spec per endpoint (table above) |
 | [data-model.md](data-model.md) | all tables, columns, constraints, indexes, migration order |
 | [implementation-plan.md](implementation-plan.md) | stack, project layout, config, deployment on the VPS, testing, milestones |
+| [openapi.yaml](openapi.yaml) + [api/examples.http](api/examples.http) | OpenAPI 3.1 description of all endpoints and runnable example requests |
 
 ## Next steps
 
