@@ -1,0 +1,2321 @@
+# OpenAPI 3.1 description of the Workout Tracker BE API.
+#
+# Reconstructed from docs/api/endpoints/*.md and reconciled against the
+# implementation (internal/httpapi/routes.go, render/errors.go, the handlers and
+# the domain types). Where the prose and the code differ, the code wins; see the
+# notes in each description.
+openapi: 3.1.0
+
+info:
+  title: Workout Tracker BE API
+  version: "1.0.0"
+  summary: Offline-first sync API for the mobile workout tracker.
+  description: |
+    Bearer-token API for syncing workout progress and plans between the devices
+    of one user, plus a shared exercise catalogue.
+
+    Conventions
+    -----------
+    - Base path `/v1`; all bodies are `application/json; charset=utf-8` unless
+      stated otherwise.
+    - Authentication is an opaque bearer token (`Authorization: Bearer <token>`),
+      valid for 365 days. Only `POST /v1/auth/login` and `GET /healthz` are
+      anonymous.
+    - Two roles: `user` and `admin`. Admin accounts are management-only (they
+      cannot use workout data endpoints) and are limited to endpoints 1, 13, 14
+      plus login/logout for their own session.
+    - IDs are lowercase UUID strings. Progress and workout plan IDs are
+      client-generated; exercises accept an optional client-generated ID.
+    - Timestamps are RFC 3339 UTC (`2026-09-19T08:30:00Z`).
+    - Field names are `snake_case`. Unknown request fields are rejected (400).
+    - Decimal weights (`kg`, max 2 places) and distances (`m`, max 2 places) are
+      JSON numbers, never strings. `rpe` is a number in 0.5 steps from 1 to 10.
+    - For client-written rows, `updated_at` is the client's last-modified time
+      (the conflict-rule input) and `server_updated_at` is the server sync
+      cursor. `deleted_at` is nullable (soft delete).
+    - List endpoints return `{items, next_cursor}`; `next_cursor` is null on the
+      last page. `limit` defaults to 50 and is rejected (422) outside 1..200.
+    - The general request body limit is 1 MiB; the exercise image upload is 2 MiB
+      and is the only non-JSON body.
+    - Error responses always use the envelope `{"error": {code, message,
+      details}}`; `code` is a stable machine value.
+
+    Exercise image URLs
+    -------------------
+    `image_url` is built from the server's `MEDIA_BASE_URL` configuration plus
+    the exercise id and image hash, e.g.
+    `{MEDIA_BASE_URL}/media/exercises/{id}/{hash}.{ext}`. It is null when the
+    exercise has no image. Media files are public and unauthenticated, served by
+    the reverse proxy (not part of this JSON API).
+
+servers:
+  - url: https://api.example.com
+    description: |
+      Placeholder base URL. All paths below are relative to it.
+
+tags:
+  - name: auth
+    description: Login, logout, token listing and revocation.
+  - name: admin
+    description: Admin-only user management (register, revoke logins, change password).
+  - name: progress
+    description: Completed workout sessions (client-generated UUIDs, soft delete).
+  - name: plans
+    description: Workout plans, one flat exercise list each.
+  - name: exercises
+    description: Shared exercise master catalogue, including images.
+  - name: ops
+    description: Operational endpoints.
+
+paths:
+  /v1/auth/register:
+    post:
+      operationId: register
+      tags: [admin]
+      summary: Register a user (admin only)
+      description: |
+        Admin creates a user account with role `user`. Does not return a token;
+        the new user logs in separately. No public sign-up.
+
+        Auth: bearer token, role `admin` (403 otherwise).
+      security:
+        - bearerAuth: []
+      x-required-role: admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+            examples:
+              register:
+                summary: Register user "ihsan"
+                value:
+                  username: ihsan
+                  password: "123"
+      responses:
+        '201':
+          description: User created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+              examples:
+                created:
+                  value:
+                    id: 0195f3a2-7c1e-7a55-9d3b-2f6e8a1b4c90
+                    username: ihsan
+                    role: user
+                    created_at: '2026-09-19T08:30:00Z'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+
+  /v1/auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: Log in and issue a token
+      description: |
+        Verify credentials and return a new opaque bearer token. Works for both
+        roles. A new token row is created on every login; existing tokens stay
+        valid. Brute-force protected per username and per client IP.
+      security: []
+      x-required-role: none
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            examples:
+              login:
+                summary: Login from an iPhone
+                value:
+                  username: ihsan
+                  password: "123"
+                  device_name: Ihsan's iPhone
+      responses:
+        '200':
+          description: Login succeeded; `access_token` is shown once.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+              examples:
+                login:
+                  value:
+                    token_id: 0195f3a2-dddd-7000-8000-000000000200
+                    access_token: wt_Xk3p-EXAMPLE-TOKEN-43chars
+                    token_type: Bearer
+                    expires_at: '2027-09-19T08:30:00Z'
+                    user:
+                      id: 0195f3a2-7c1e-7a55-9d3b-2f6e8a1b4c90
+                      username: ihsan
+                      role: user
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '500':
+          $ref: '#/components/responses/Internal'
+
+  /v1/auth/logout:
+    post:
+      operationId: logout
+      tags: [auth]
+      summary: Log out the current token
+      description: |
+        Revoke the token used for this request. Other devices stay logged in.
+
+        Auth: bearer token, any role.
+      security:
+        - bearerAuth: []
+      x-required-role: user|admin
+      responses:
+        '204':
+          description: Token revoked.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/Internal'
+
+  /v1/auth/revoke:
+    post:
+      operationId: revokeTokens
+      tags: [auth]
+      summary: Revoke the caller's other tokens
+      description: |
+        Revoke one token by id, every other token (`scope: others`), or all of
+        them (`scope: all`). Exactly one of `token_id` and `scope` is required.
+
+        Auth: bearer token, role `user` (admin gets 403; use endpoint 13 for
+        one's own username instead).
+      security:
+        - bearerAuth: []
+      x-required-role: user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RevokeRequest'
+            examples:
+              byId:
+                summary: Revoke one device by token id
+                value:
+                  token_id: 0195f3a2-dddd-7000-8000-000000000200
+              others:
+                summary: Revoke all other devices
+                value:
+                  scope: others
+      responses:
+        '200':
+          description: Revocation done; `revoked_count` may be 0 (idempotent).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RevokeResponse'
+              examples:
+                done:
+                  value:
+                    revoked_count: 2
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/Internal'
+
+  /v1/auth/tokens:
+    get:
+      operationId: listTokens
+      tags: [auth]
+      summary: List the caller's active tokens
+      description: |
+        One item per active device login, newest first. `current: true` marks the
+        token that authenticated this request. Secrets are never returned.
+
+        Auth: bearer token, role `user` (admin gets 403).
+      security:
+        - bearerAuth: []
+      x-required-role: user
+      responses:
+        '200':
+          description: Active tokens.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenListResponse'
+              examples:
+                tokens:
+                  value:
+                    items:
+                      - id: 0195f3a2-dddd-7000-8000-000000000200
+                        device_name: Ihsan's iPhone
+                        created_at: '2026-09-19T08:30:00Z'
+                        last_used_at: '2026-09-19T09:10:00Z'
+                        expires_at: '2027-09-19T08:30:00Z'
+                        current: true
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '500':
+          $ref: '#/components/responses/Internal'
+
+  /v1/admin/users/{username}/revoke-login:
+    post:
+      operationId: adminRevokeLogin
+      tags: [admin]
+      summary: Force a user's logins to be revoked (admin only)
+      description: |
+        Revoke every active token of the target user on every device.
+
+        Auth: bearer token, role `admin` (403 otherwise).
+      security:
+        - bearerAuth: []
+      x-required-role: admin
+      parameters:
+        - $ref: '#/components/parameters/Username'
+      responses:
+        '200':
+          description: Revocation done; `revoked_count` may be 0 (idempotent).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RevokeResponse'
+              examples:
+                done:
+                  value:
+                    revoked_count: 3
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+
+  /v1/admin/users/{username}/password:
+    put:
+      operationId: adminChangePassword
+      tags: [admin]
+      summary: Change a user's password (admin only)
+      description: |
+        Set a new password for the target user; all their active tokens are
+        revoked (the caller's own token is kept when the admin changes their own
+        password).
+
+        Auth: bearer token, role `admin` (403 otherwise).
+      security:
+        - bearerAuth: []
+      x-required-role: admin
+      parameters:
+        - $ref: '#/components/parameters/Username'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+            examples:
+              change:
+                value:
+                  password: newpass
+      responses:
+        '204':
+          description: Password changed and target tokens revoked.
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/Internal'
+
+  /v1/progress:
+    get:
+      operationId: listProgress
+      tags: [progress]
+      summary: List the caller's completed sessions
+      description: |
+        Doubles as the sync pull endpoint via `updated_since`. Summaries by
+        default; `expand=exercises` returns full sessions (with exercises and
+        sets). With `updated_since`, rows are ordered by `server_updated_at`
+        ascending and soft-deleted rows are included.
+
+        Auth: bearer token, role `user` (admin gets 403).
+      security:
+        - bearerAuth: []
+      x-required-role: user
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/UpdatedSince'
+        - $ref: '#/components/parameters/WorkoutPlanIDFilter'
+        - $ref: '#/components/parameters/From'
+        - $ref: '#/components/parameters/To'
+        - $ref: '#/components/parameters/IncludeDeleted'
+        - $ref: '#/components/parameters/Expand'
+      responses:
+        '200':
+          description: |
+            A page of summaries, or of full sessions when `expand=exercises`.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/ProgressSummaryPage'
+                  - $ref: '#/components/schemas/ProgressPage'
+              examples:
+                syncExpanded:
+                  summary: Sync pull with updated_since and expand=exercises
+                  value:
+                    items:
+                      - id: 0195f3a2-cccc-7000-8000-000000000100
+                        workout_plan_id: 0195f3a2-aaaa-7000-8000-000000000001
+                        name: Push Day A
+                        notes: Felt strong
+                        started_at: '2026-09-19T08:00:00Z'
+                        ended_at: '2026-09-19T08:55:00Z'
+                        duration_seconds: 3120
+                        updated_at: '2026-09-19T08:55:02Z'
+                        created_at: '2026-09-19T08:55:04Z'
+                        server_updated_at: '2026-09-19T08:55:04Z'
+                        deleted_at: null
+                        exercises:
+                          - exercise_id: 0195f3a2-bbbb-7000-8000-000000000010
+                            position: 0
+                            notes: null
+                            sets:
+                              - position: 0
+                                type: normal
+                                reps: 8
+                                weight: 80.0
+                                duration_seconds: null
+                                distance_meters: null
+                                rpe: 8.5
+                                completed: true
+                    next_cursor: null
+                summary:
+                  summary: Default summary page
+                  value:
+                    items:
+                      - id: 0195f3a2-cccc-7000-8000-000000000100
+                        workout_plan_id: 0195f3a2-aaaa-7000-8000-000000000001
+                        name: Push Day A
+                        started_at: '2026-09-19T08:00:00Z'
+                        ended_at: '2026-09-19T08:55:00Z'
+                        duration_seconds: 3120
+                        exercise_count: 5
+                        set_count: 18
+                        updated_at: '2026-09-19T08:55:02Z'
+                        server_updated_at: '2026-09-19T08:55:04Z'
+                        deleted_at: null
+                    next_cursor: null
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/Internal'
+
+  /v1/progress/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathID'
+    get:
+      operationId: getProgress
+      tags: [progress]
+      summary: Get one completed session
+      description: |
+        Full session with exercises and sets. A missing, soft-deleted or
+        foreign-owned session is 404.
+
+        Auth: bearer token, role `user` (admin gets 403).
+      security:
+        - bearerAuth: []
+      x-required-role: user
+      responses:
+        '200':
+          description: The session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Progress'
+              examples:
+                session:
+                  value:
+                    id: 0195f3a2-cccc-7000-8000-000000000100
+                    workout_plan_id: 0195f3a2-aaaa-7000-8000-000000000001
+                    name: Push Day A
+                    notes: Felt strong
+                    started_at: '2026-09-19T08:00:00Z'
+                    ended_at: '2026-09-19T08:55:00Z'
+                    duration_seconds: 3120
+                    updated_at: '2026-09-19T08:55:02Z'
+                    created_at: '2026-09-19T08:55:04Z'
+                    server_updated_at: '2026-09-19T08:55:04Z'
+                    deleted_at: null
+                    exercises:
+                      - exercise_id: 0195f3a2-bbbb-7000-8000-000000000010
+                        position: 0
+                        notes: null
+                        sets:
+                          - position: 0
+                            type: normal
+                            reps: 8
+                            weight: 80.0
+                            duration_seconds: null
+                            distance_meters: null
+                            rpe: 8.5
+                            completed: true
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+    put:
+      operationId: saveProgress
+      tags: [progress]
+      summary: Create or update a completed session
+      description: |
+        Idempotent upsert keyed by the client-generated `id`. The request is the
+        full state of the session (replace, not patch).
+
+        Conflict rule: no row -> 201; row soft-deleted -> 409 `deleted`; request
+        `updated_at` older than stored -> 409 `stale` with the server copy in
+        `error.details[0].current`; equal -> 200 no-op returning the stored copy;
+        newer -> 200 saved. `updated_at` more than 5 minutes in the future is 422.
+
+        Auth: bearer token, role `user` (admin gets 403).
+      security:
+        - bearerAuth: []
+      x-required-role: user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProgressInput'
+            examples:
+              saveProgress:
+                summary: Save a completed session
+                value:
+                  workout_plan_id: 0195f3a2-aaaa-7000-8000-000000000001
+                  name: Push Day A
+                  notes: Felt strong
+                  started_at: '2026-09-19T08:00:00Z'
+                  ended_at: '2026-09-19T08:55:00Z'
+                  duration_seconds: 3120
+                  updated_at: '2026-09-19T08:55:02Z'
+                  exercises:
+                    - exercise_id: 0195f3a2-bbbb-7000-8000-000000000010
+                      position: 0
+                      notes: null
+                      sets:
+                        - position: 0
+                          type: warmup
+                          reps: 12
+                          weight: 40.0
+                          duration_seconds: null
+                          distance_meters: null
+                          rpe: null
+                          completed: true
+                        - position: 1
+                          type: normal
+                          reps: 8
+                          weight: 80.0
+                          duration_seconds: null
+                          distance_meters: null
+                          rpe: 8.5
+                          completed: true
+      responses:
+        '201':
+          description: Session created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Progress'
+        '200':
+          description: Session updated, or no-op when `updated_at` equals the stored value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Progress'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/Internal'
+    delete:
+      operationId: deleteProgress
+      tags: [progress]
+      summary: Soft-delete a completed session
+      description: |
+        Sets `deleted_at` and `server_updated_at`; children are kept. Idempotent:
+        deleting an already-deleted session also returns 204. A later `PUT` to
+        the same id is 409 `deleted`.
+
+        Auth: bearer token, role `user` (admin gets 403).
+      security:
+        - bearerAuth: []
+      x-required-role: user
+      responses:
+        '204':
+          description: Session deleted (or already deleted).
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+
+  /v1/workout-plans:
+    get:
+      operationId: listWorkoutPlans
+      tags: [plans]
+      summary: List the caller's workout plans
+      description: |
+        Summaries by default; `expand=exercises` returns full plans. With
+        `updated_since`, rows are ordered by `server_updated_at` ascending and
+        soft-deleted rows are included.
+
+        Auth: bearer token, role `user` (admin gets 403).
+      security:
+        - bearerAuth: []
+      x-required-role: user
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/UpdatedSince'
+        - $ref: '#/components/parameters/IncludeDeleted'
+        - $ref: '#/components/parameters/Expand'
+      responses:
+        '200':
+          description: A page of plan summaries, or of full plans with `expand=exercises`.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/PlanSummaryPage'
+                  - $ref: '#/components/schemas/PlanPage'
+              examples:
+                summary:
+                  value:
+                    items:
+                      - id: 0195f3a2-aaaa-7000-8000-000000000001
+                        name: Push
+                        description: Chest / shoulders / triceps
+                        exercise_count: 6
+                        created_at: '2026-08-01T10:00:00Z'
+                        updated_at: '2026-09-10T07:12:00Z'
+                        server_updated_at: '2026-09-10T07:12:03Z'
+                        deleted_at: null
+                    next_cursor: null
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/Internal'
+
+  /v1/workout-plans/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathID'
+    get:
+      operationId: getWorkoutPlan
+      tags: [plans]
+      summary: Get one workout plan
+      description: |
+        Full plan with all exercises and targets. A missing, soft-deleted or
+        foreign-owned plan is 404.
+
+        Auth: bearer token, role `user` (admin gets 403).
+      security:
+        - bearerAuth: []
+      x-required-role: user
+      responses:
+        '200':
+          description: The plan.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Plan'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+    put:
+      operationId: saveWorkoutPlan
+      tags: [plans]
+      summary: Create or update a workout plan
+      description: |
+        Idempotent upsert keyed by the client-generated `id`; the request is the
+        full state of the plan. Same conflict rule as `saveProgress`. A user may
+        have at most 100 active plans (422 `plan_limit` when creating beyond it).
+
+        Auth: bearer token, role `user` (admin gets 403).
+      security:
+        - bearerAuth: []
+      x-required-role: user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlanInput'
+            examples:
+              savePlan:
+                summary: Save a "Push" plan
+                value:
+                  name: Push
+                  description: Chest / shoulders / triceps
+                  updated_at: '2026-09-19T09:00:00Z'
+                  exercises:
+                    - exercise_id: 0195f3a2-bbbb-7000-8000-000000000010
+                      position: 0
+                      target_sets: 4
+                      target_reps: 8
+                      target_reps_max: 10
+                      target_weight: 80.0
+                      target_duration_seconds: null
+                      target_distance_meters: null
+                      rest_seconds: 120
+                      notes: Pause on chest
+      responses:
+        '201':
+          description: Plan created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Plan'
+        '200':
+          description: Plan updated, or no-op when `updated_at` equals the stored value.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Plan'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/Internal'
+    delete:
+      operationId: deleteWorkoutPlan
+      tags: [plans]
+      summary: Soft-delete a workout plan
+      description: |
+        Sets `deleted_at` and `server_updated_at`; existing progress logs that
+        reference the plan are untouched. Idempotent. A later `PUT` to the same
+        id is 409 `deleted`.
+
+        Auth: bearer token, role `user` (admin gets 403).
+      security:
+        - bearerAuth: []
+      x-required-role: user
+      responses:
+        '204':
+          description: Plan deleted (or already deleted).
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+
+  /v1/exercises:
+    get:
+      operationId: listExercises
+      tags: [exercises]
+      summary: List the shared exercise catalogue
+      description: |
+        Shared by all users. Supports name search and enum filters; with
+        `updated_since` it is the sync feed ordered by `updated_at` ascending
+        and including soft-deleted exercises.
+
+        Auth: bearer token, role `user` (admin gets 403).
+      security:
+        - bearerAuth: []
+      x-required-role: user
+      parameters:
+        - $ref: '#/components/parameters/Q'
+        - $ref: '#/components/parameters/CategoryFilter'
+        - $ref: '#/components/parameters/PrimaryMuscleGroupFilter'
+        - $ref: '#/components/parameters/EquipmentFilter'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/UpdatedSince'
+        - $ref: '#/components/parameters/IncludeDeleted'
+      responses:
+        '200':
+          description: A page of exercises.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExercisePage'
+              examples:
+                list:
+                  value:
+                    items:
+                      - id: 0195f3a2-bbbb-7000-8000-000000000010
+                        name: Bench Press
+                        category: strength
+                        primary_muscle_group: chest
+                        secondary_muscle_groups: [triceps, shoulders]
+                        equipment: barbell
+                        measurement_type: reps_weight
+                        instructions: Lie on bench...
+                        image_url: https://cdn.example.com/media/exercises/0195f3a2-bbbb-7000-8000-000000000010/9f2c4e1ab37d05c6.webp
+                        created_by: 0195f3a2-7c1e-7a55-9d3b-2f6e8a1b4c90
+                        created_at: '2026-08-01T10:00:00Z'
+                        updated_at: '2026-08-01T10:00:00Z'
+                        deleted_at: null
+                    next_cursor: null
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/Internal'
+    post:
+      operationId: createExercise
+      tags: [exercises]
+      summary: Create an exercise
+      description: |
+        Add to the shared catalogue. Any regular user may create. The optional
+        client-generated `id` makes retries idempotent: the same id with
+        identical content returns 200 with the existing exercise; a different
+        name colliding with another live exercise is 409 `already_exists`.
+
+        Auth: bearer token, role `user` (admin gets 403).
+      security:
+        - bearerAuth: []
+      x-required-role: user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExerciseCreateRequest'
+            examples:
+              create:
+                summary: Create an exercise with a client id
+                value:
+                  id: 0195f3a2-bbbb-7000-8000-000000000011
+                  name: Incline Dumbbell Press
+                  category: strength
+                  primary_muscle_group: chest
+                  secondary_muscle_groups: [shoulders, triceps]
+                  equipment: dumbbell
+                  measurement_type: reps_weight
+                  instructions: Set bench to 30 degrees...
+      responses:
+        '201':
+          description: Exercise created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Exercise'
+        '200':
+          description: Idempotent retry of the same id with identical content.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Exercise'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/Internal'
+
+  /v1/exercises/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathID'
+    put:
+      operationId: updateExercise
+      tags: [exercises]
+      summary: Edit an exercise
+      description: |
+        Full replace of the editable fields. Any regular user may edit any
+        exercise. The image is not part of this request.
+
+        Auth: bearer token, role `user` (admin gets 403).
+      security:
+        - bearerAuth: []
+      x-required-role: user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExerciseUpdateRequest'
+            examples:
+              update:
+                value:
+                  name: Incline Dumbbell Press
+                  category: strength
+                  primary_muscle_group: chest
+                  secondary_muscle_groups: [shoulders, triceps]
+                  equipment: dumbbell
+                  measurement_type: reps_weight
+                  instructions: Set bench to 30 degrees, elbows at 45...
+      responses:
+        '200':
+          description: The updated exercise.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Exercise'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/Internal'
+    delete:
+      operationId: deleteExercise
+      tags: [exercises]
+      summary: Soft-delete an exercise
+      description: |
+        Any regular user may delete any exercise. Idempotent: deleting an
+        already-deleted exercise also returns 204. The image file is kept.
+
+        Auth: bearer token, role `user` (admin gets 403).
+      security:
+        - bearerAuth: []
+      x-required-role: user
+      responses:
+        '204':
+          description: Exercise deleted (or already deleted).
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+
+  /v1/exercises/{id}/image:
+    parameters:
+      - $ref: '#/components/parameters/PathID'
+    put:
+      operationId: setExerciseImage
+      tags: [exercises]
+      summary: Set or replace an exercise image
+      description: |
+        Upload the single static image of an exercise. The body is the **raw
+        image bytes** (not multipart, not base64) with `Content-Type`
+        `image/jpeg`, `image/png` or `image/webp`.
+
+        Rules: max 2 MiB; max 2000x2000 px; JPEG/PNG/WebP only. The server sniffs
+        the real type from the bytes and the header must agree. The server does
+        no resizing or re-encoding. Uploading identical bytes is a no-op (same
+        hash, no `updated_at` bump). The response is the exercise with the new
+        `image_url`.
+
+        Auth: bearer token, role `user` (admin gets 403).
+      security:
+        - bearerAuth: []
+      x-required-role: user
+      requestBody:
+        required: true
+        content:
+          image/jpeg:
+            schema:
+              type: string
+              format: binary
+            examples:
+              jpeg:
+                summary: Raw JPEG bytes
+                value: <raw JPEG bytes>
+          image/png:
+            schema:
+              type: string
+              format: binary
+            examples:
+              png:
+                summary: Raw PNG bytes
+                value: <raw PNG bytes>
+          image/webp:
+            schema:
+              type: string
+              format: binary
+            examples:
+              webp:
+                summary: Raw WebP bytes
+                value: <raw WebP bytes>
+      responses:
+        '200':
+          description: The exercise with its new `image_url`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Exercise'
+              examples:
+                imageSet:
+                  value:
+                    id: 0195f3a2-bbbb-7000-8000-000000000010
+                    name: Bench Press
+                    category: strength
+                    primary_muscle_group: chest
+                    secondary_muscle_groups: [triceps, shoulders]
+                    equipment: barbell
+                    measurement_type: reps_weight
+                    instructions: Lie on bench...
+                    image_url: https://cdn.example.com/media/exercises/0195f3a2-bbbb-7000-8000-000000000010/9f2c4e1ab37d05c6.webp
+                    created_by: 0195f3a2-7c1e-7a55-9d3b-2f6e8a1b4c90
+                    created_at: '2026-08-01T10:00:00Z'
+                    updated_at: '2026-09-19T10:00:00Z'
+                    deleted_at: null
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/ValidationFailed'
+        '500':
+          $ref: '#/components/responses/Internal'
+    delete:
+      operationId: deleteExerciseImage
+      tags: [exercises]
+      summary: Remove an exercise image
+      description: |
+        Clears the image columns and deletes the file. Idempotent: no image, or
+        an already soft-deleted exercise, also returns 204.
+
+        Auth: bearer token, role `user` (admin gets 403).
+      security:
+        - bearerAuth: []
+      x-required-role: user
+      responses:
+        '204':
+          description: Image removed (or there was none).
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/Internal'
+
+  /healthz:
+    get:
+      operationId: healthz
+      tags: [ops]
+      summary: Liveness probe
+      description: |
+        Returns 200 while the database ping succeeds within 2 seconds, 503
+        otherwise. No authentication.
+      security: []
+      x-required-role: none
+      responses:
+        '200':
+          description: Service healthy.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+              examples:
+                ok:
+                  value:
+                    status: ok
+        '503':
+          description: Database ping failed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+              examples:
+                unavailable:
+                  value:
+                    status: unavailable
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: opaque
+      description: |
+        Opaque token issued by `POST /v1/auth/login`. Send it as
+        `Authorization: Bearer <access_token>`. Expired, revoked or unknown
+        tokens get 401 with `WWW-Authenticate: Bearer`.
+
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: Page size, 1..200. Defaults to 50; out of range is 422.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: Opaque `next_cursor` from the previous page. A malformed cursor is 400.
+      schema:
+        type: string
+    UpdatedSince:
+      name: updated_since
+      in: query
+      required: false
+      description: |
+        RFC 3339 timestamp. Returns rows whose sync cursor is strictly after it,
+        including soft-deleted rows, ordered for sync. A non-RFC 3339 value is
+        400. Note: a `+` offset must be URL-encoded as `%2B`.
+      schema:
+        type: string
+        format: date-time
+    IncludeDeleted:
+      name: include_deleted
+      in: query
+      required: false
+      description: |
+        Include soft-deleted rows in the default order. Defaults to false;
+        `updated_since` implies true. Only the literal `true`/`false` are
+        accepted (else 422).
+      schema:
+        type: boolean
+        default: false
+    Expand:
+      name: expand
+      in: query
+      required: false
+      description: |
+        `exercises` returns full objects (progress sessions or plans with their
+        exercises) instead of summaries. Any other value is 422.
+      schema:
+        type: string
+        enum: [exercises]
+    Q:
+      name: q
+      in: query
+      required: false
+      description: Case-insensitive substring name search.
+      schema:
+        type: string
+        maxLength: 100
+    CategoryFilter:
+      name: category
+      in: query
+      required: false
+      description: Filter by exercise category.
+      schema:
+        $ref: '#/components/schemas/Category'
+    PrimaryMuscleGroupFilter:
+      name: primary_muscle_group
+      in: query
+      required: false
+      description: Filter by primary muscle group.
+      schema:
+        $ref: '#/components/schemas/MuscleGroup'
+    EquipmentFilter:
+      name: equipment
+      in: query
+      required: false
+      description: Filter by equipment.
+      schema:
+        $ref: '#/components/schemas/Equipment'
+    WorkoutPlanIDFilter:
+      name: workout_plan_id
+      in: query
+      required: false
+      description: Filter progress sessions by workout plan. A non-UUID value is 400.
+      schema:
+        type: string
+        format: uuid
+    From:
+      name: from
+      in: query
+      required: false
+      description: Inclusive lower bound on `started_at`.
+      schema:
+        type: string
+        format: date-time
+    To:
+      name: to
+      in: query
+      required: false
+      description: Inclusive upper bound on `started_at`.
+      schema:
+        type: string
+        format: date-time
+    PathID:
+      name: id
+      in: path
+      required: true
+      description: Resource UUID (canonical hyphenated form). A malformed value is 400.
+      schema:
+        type: string
+        format: uuid
+    Username:
+      name: username
+      in: path
+      required: true
+      description: Target username (lowercased). Unknown username is 404.
+      schema:
+        type: string
+
+  responses:
+    BadRequest:
+      description: 'Malformed request (400 `bad_request`): bad JSON, unknown field, bad path id, bad cursor or timestamp.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            badRequest:
+              value:
+                error:
+                  code: bad_request
+                  message: The request is malformed.
+    Unauthorized:
+      description: 'Missing, invalid, expired or revoked token, or bad credentials (401 `unauthorized`).'
+      headers:
+        WWW-Authenticate:
+          description: Always `Bearer`.
+          schema:
+            type: string
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            unauthorized:
+              value:
+                error:
+                  code: unauthorized
+                  message: Authentication is required.
+    Forbidden:
+      description: 'Authenticated but not allowed (403 `forbidden`), e.g. wrong role.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            forbidden:
+              value:
+                error:
+                  code: forbidden
+                  message: You are not allowed to perform this action.
+    NotFound:
+      description: 'Missing resource, or a resource owned by another user (404 `not_found`; existence is not leaked).'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            notFound:
+              value:
+                error:
+                  code: not_found
+                  message: The resource was not found.
+    Conflict:
+      description: |
+        Conflict (409 `conflict`): duplicate (`already_taken`, `already_exists`,
+        `id_taken`), stale write (`stale`, with the server copy in
+        `error.details[0].current`) or write to a deleted row (`deleted`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            stale:
+              summary: Stale progress write; the server copy is returned
+              value:
+                error:
+                  code: conflict
+                  message: The request conflicts with the current state of the resource.
+                  details:
+                    - issue: stale
+                      current:
+                        id: 0195f3a2-cccc-7000-8000-000000000100
+                        workout_plan_id: 0195f3a2-aaaa-7000-8000-000000000001
+                        name: Push Day A
+                        notes: Felt strong
+                        started_at: '2026-09-19T08:00:00Z'
+                        ended_at: '2026-09-19T08:55:00Z'
+                        duration_seconds: 3120
+                        updated_at: '2026-09-19T08:55:02Z'
+                        created_at: '2026-09-19T08:55:04Z'
+                        server_updated_at: '2026-09-19T08:55:04Z'
+                        deleted_at: null
+                        exercises: []
+            deleted:
+              summary: Write to a soft-deleted row
+              value:
+                error:
+                  code: conflict
+                  message: The request conflicts with the current state of the resource.
+                  details:
+                    - issue: deleted
+    PayloadTooLarge:
+      description: 'Body over the limit (413 `payload_too_large`): 1 MiB for a JSON body, 2 MiB for the image upload.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            tooLarge:
+              value:
+                error:
+                  code: payload_too_large
+                  message: The request body is too large.
+    UnsupportedMediaType:
+      description: 'Wrong `Content-Type` (415 `unsupported_media_type`): JSON routes require `application/json`; the image upload requires a supported image type that matches the sniffed bytes.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            unsupported:
+              value:
+                error:
+                  code: unsupported_media_type
+                  message: The content type is not supported.
+    ValidationFailed:
+      description: 'Well-formed input with invalid values (422 `validation_failed`); `details` lists every problem.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            validation:
+              value:
+                error:
+                  code: validation_failed
+                  message: The request has invalid values.
+                  details:
+                    - field: username
+                      issue: invalid_format
+    RateLimited:
+      description: 'Too many requests (429 `rate_limited`); see `Retry-After`.'
+      headers:
+        Retry-After:
+          description: Seconds to wait before retrying.
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            rateLimited:
+              value:
+                error:
+                  code: rate_limited
+                  message: Too many requests. Try again later.
+    Internal:
+      description: 'Unexpected server error (500 `internal`). No internals are leaked.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          examples:
+            internal:
+              value:
+                error:
+                  code: internal
+                  message: Internal server error.
+
+  schemas:
+    # --- errors -------------------------------------------------------------
+    ErrorCode:
+      type: string
+      description: Stable machine-readable error code.
+      enum:
+        - bad_request
+        - unauthorized
+        - forbidden
+        - not_found
+        - conflict
+        - payload_too_large
+        - unsupported_media_type
+        - validation_failed
+        - rate_limited
+        - internal
+
+    ErrorDetail:
+      type: object
+      required: [issue]
+      properties:
+        field:
+          type: string
+          description: JSON field path (may be empty or absent for whole-request issues).
+        issue:
+          type: string
+          description: Stable machine issue value, e.g. `stale`, `deleted`, `already_exists`, `required`, `invalid_value`.
+        existing_id:
+          type: string
+          format: uuid
+          description: Other exercise's id for an `already_exists` conflict.
+        current:
+          description: |
+            Server's current copy for a `stale` conflict, in the response shape
+            of the resource (a `Progress` or a `Plan`).
+          oneOf:
+            - $ref: '#/components/schemas/Progress'
+            - $ref: '#/components/schemas/Plan'
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              $ref: '#/components/schemas/ErrorCode'
+            message:
+              type: string
+              description: Human-readable summary; may change between releases.
+            details:
+              type: array
+              description: Optional list of problems or conflict metadata.
+              items:
+                $ref: '#/components/schemas/ErrorDetail'
+
+    # --- auth ---------------------------------------------------------------
+    RegisterRequest:
+      type: object
+      required: [username, password]
+      additionalProperties: false
+      properties:
+        username:
+          type: string
+          description: Trimmed and lowercased; 3-30 chars of `[a-z0-9_]`; not reserved; unique.
+          minLength: 3
+          maxLength: 30
+        password:
+          type: string
+          description: Non-empty, at most 128 bytes. No other policy.
+          maxLength: 128
+
+    LoginRequest:
+      type: object
+      required: [username, password]
+      additionalProperties: false
+      properties:
+        username:
+          type: string
+          description: Trimmed and lowercased.
+        password:
+          type: string
+          maxLength: 128
+        device_name:
+          type: [string, "null"]
+          description: Optional label for the new token (max 100 chars).
+          maxLength: 100
+
+    UserRef:
+      type: object
+      required: [id, username, role]
+      properties:
+        id:
+          type: string
+          format: uuid
+        username:
+          type: string
+        role:
+          $ref: '#/components/schemas/Role'
+
+    User:
+      type: object
+      required: [id, username, role, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        username:
+          type: string
+        role:
+          $ref: '#/components/schemas/Role'
+        created_at:
+          type: string
+          format: date-time
+
+    LoginResponse:
+      type: object
+      required: [token_id, access_token, token_type, expires_at, user]
+      properties:
+        token_id:
+          type: string
+          format: uuid
+          description: Public id of the created token (not the secret).
+        access_token:
+          type: string
+          description: The bearer token; shown once.
+        token_type:
+          type: string
+          enum: [Bearer]
+        expires_at:
+          type: string
+          format: date-time
+        user:
+          $ref: '#/components/schemas/UserRef'
+
+    TokenInfo:
+      type: object
+      required: [id, created_at, expires_at, current]
+      properties:
+        id:
+          type: string
+          format: uuid
+        device_name:
+          type: [string, "null"]
+          maxLength: 100
+        created_at:
+          type: string
+          format: date-time
+        last_used_at:
+          type: [string, "null"]
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        current:
+          type: boolean
+          description: True for the token used to authenticate this request.
+
+    TokenListResponse:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/TokenInfo'
+
+    RevokeRequest:
+      type: object
+      additionalProperties: false
+      description: Exactly one of `token_id` and `scope` must be present.
+      properties:
+        token_id:
+          type: string
+          format: uuid
+          description: Id of one of the caller's tokens.
+        scope:
+          type: string
+          description: '`others` = every active token except the current one; `all` = every active token including the current one.'
+          enum: [others, all]
+
+    RevokeResponse:
+      type: object
+      required: [revoked_count]
+      properties:
+        revoked_count:
+          type: integer
+          format: int64
+          minimum: 0
+
+    ChangePasswordRequest:
+      type: object
+      required: [password]
+      additionalProperties: false
+      properties:
+        password:
+          type: string
+          description: Non-empty, at most 128 bytes.
+          maxLength: 128
+
+    # --- enums --------------------------------------------------------------
+    Role:
+      type: string
+      enum: [user, admin]
+
+    Category:
+      type: string
+      enum: [strength, cardio, mobility]
+
+    MuscleGroup:
+      type: string
+      enum:
+        - chest
+        - upper_back
+        - lats
+        - lower_back
+        - traps
+        - shoulders
+        - biceps
+        - triceps
+        - forearms
+        - abs
+        - obliques
+        - glutes
+        - quads
+        - hamstrings
+        - calves
+        - adductors
+        - abductors
+        - full_body
+
+    Equipment:
+      type: string
+      enum:
+        - barbell
+        - dumbbell
+        - kettlebell
+        - machine
+        - cable
+        - smith_machine
+        - bodyweight
+        - resistance_band
+        - cardio_machine
+        - other
+
+    MeasurementType:
+      type: string
+      enum: [reps_weight, reps, duration, distance_duration]
+
+    SetType:
+      type: string
+      enum: [warmup, normal, drop, failure]
+
+    # --- decimals -----------------------------------------------------------
+    Weight:
+      type: number
+      description: Weight in kg, 0 to 99999.99, at most 2 decimals.
+      minimum: 0
+      maximum: 99999.99
+      multipleOf: 0.01
+
+    DistanceMeters:
+      type: number
+      description: Distance in meters, 0 to 9999999.99, at most 2 decimals.
+      minimum: 0
+      maximum: 9999999.99
+      multipleOf: 0.01
+
+    Rpe:
+      type: number
+      description: Rate of perceived exertion, 1 to 10 in 0.5 steps.
+      minimum: 1
+      maximum: 10
+      multipleOf: 0.5
+
+    # --- exercises ----------------------------------------------------------
+    ExerciseInput:
+      type: object
+      required: [name, category, primary_muscle_group, equipment, measurement_type]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        category:
+          $ref: '#/components/schemas/Category'
+        primary_muscle_group:
+          $ref: '#/components/schemas/MuscleGroup'
+        secondary_muscle_groups:
+          type: array
+          description: Up to 5 distinct groups, none equal to the primary.
+          maxItems: 5
+          items:
+            $ref: '#/components/schemas/MuscleGroup'
+        equipment:
+          $ref: '#/components/schemas/Equipment'
+        measurement_type:
+          $ref: '#/components/schemas/MeasurementType'
+        instructions:
+          type: [string, "null"]
+          maxLength: 4000
+
+    ExerciseCreateRequest:
+      type: object
+      required: [name, category, primary_muscle_group, equipment, measurement_type]
+      additionalProperties: false
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Optional client-generated id, enabling offline creation and idempotent retry.
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        category:
+          $ref: '#/components/schemas/Category'
+        primary_muscle_group:
+          $ref: '#/components/schemas/MuscleGroup'
+        secondary_muscle_groups:
+          type: array
+          description: Up to 5 distinct groups, none equal to the primary.
+          maxItems: 5
+          items:
+            $ref: '#/components/schemas/MuscleGroup'
+        equipment:
+          $ref: '#/components/schemas/Equipment'
+        measurement_type:
+          $ref: '#/components/schemas/MeasurementType'
+        instructions:
+          type: [string, "null"]
+          maxLength: 4000
+
+    ExerciseUpdateRequest:
+      $ref: '#/components/schemas/ExerciseInput'
+
+    Exercise:
+      type: object
+      required:
+        - id
+        - name
+        - category
+        - primary_muscle_group
+        - secondary_muscle_groups
+        - equipment
+        - measurement_type
+        - created_by
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        category:
+          $ref: '#/components/schemas/Category'
+        primary_muscle_group:
+          $ref: '#/components/schemas/MuscleGroup'
+        secondary_muscle_groups:
+          type: array
+          items:
+            $ref: '#/components/schemas/MuscleGroup'
+        equipment:
+          $ref: '#/components/schemas/Equipment'
+        measurement_type:
+          $ref: '#/components/schemas/MeasurementType'
+        instructions:
+          type: [string, "null"]
+        image_url:
+          type: [string, "null"]
+          format: uri
+          description: Public URL built from `MEDIA_BASE_URL`, or null when there is no image.
+        created_by:
+          type: string
+          format: uuid
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+          description: Server-set on every edit, image change and delete; the list sync cursor.
+        deleted_at:
+          type: [string, "null"]
+          format: date-time
+
+    ExercisePage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Exercise'
+        next_cursor:
+          type: [string, "null"]
+
+    # --- workout plans ------------------------------------------------------
+    PlanExerciseInput:
+      type: object
+      required: [exercise_id, position, target_sets]
+      additionalProperties: false
+      properties:
+        exercise_id:
+          type: string
+          format: uuid
+        position:
+          type: integer
+          minimum: 0
+        target_sets:
+          type: integer
+          minimum: 1
+          maximum: 20
+        target_reps:
+          type: [integer, "null"]
+          minimum: 1
+        target_reps_max:
+          type: [integer, "null"]
+          minimum: 1
+          description: Requires `target_reps` and must be >= it.
+        target_weight:
+          oneOf:
+            - $ref: '#/components/schemas/Weight'
+            - type: "null"
+        target_duration_seconds:
+          type: [integer, "null"]
+          minimum: 0
+        target_distance_meters:
+          oneOf:
+            - $ref: '#/components/schemas/DistanceMeters'
+            - type: "null"
+        rest_seconds:
+          type: [integer, "null"]
+          minimum: 0
+          maximum: 3600
+        notes:
+          type: [string, "null"]
+          maxLength: 1000
+
+    PlanInput:
+      type: object
+      required: [name, updated_at, exercises]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: [string, "null"]
+          maxLength: 1000
+        updated_at:
+          type: string
+          format: date-time
+          description: Client's last-modified time; conflict-rule input. At most 5 minutes in the future.
+        exercises:
+          type: array
+          maxItems: 50
+          description: May be empty (draft). Positions must be unique within the plan.
+          items:
+            $ref: '#/components/schemas/PlanExerciseInput'
+
+    PlanExercise:
+      type: object
+      required: [exercise_id, position, target_sets]
+      properties:
+        exercise_id:
+          type: string
+          format: uuid
+        position:
+          type: integer
+          minimum: 0
+        target_sets:
+          type: integer
+          minimum: 1
+          maximum: 20
+        target_reps:
+          type: [integer, "null"]
+          minimum: 1
+        target_reps_max:
+          type: [integer, "null"]
+          minimum: 1
+        target_weight:
+          oneOf:
+            - $ref: '#/components/schemas/Weight'
+            - type: "null"
+        target_duration_seconds:
+          type: [integer, "null"]
+          minimum: 0
+        target_distance_meters:
+          oneOf:
+            - $ref: '#/components/schemas/DistanceMeters'
+            - type: "null"
+        rest_seconds:
+          type: [integer, "null"]
+          minimum: 0
+          maximum: 3600
+        notes:
+          type: [string, "null"]
+
+    Plan:
+      type: object
+      required:
+        - id
+        - name
+        - updated_at
+        - created_at
+        - server_updated_at
+        - exercises
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: [string, "null"]
+        updated_at:
+          type: string
+          format: date-time
+          description: Client's last-modified time (conflict-rule input).
+        created_at:
+          type: string
+          format: date-time
+        server_updated_at:
+          type: string
+          format: date-time
+          description: Server sync cursor; set on every accepted write and delete.
+        deleted_at:
+          type: [string, "null"]
+          format: date-time
+        exercises:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlanExercise'
+
+    PlanSummary:
+      type: object
+      required:
+        - id
+        - name
+        - exercise_count
+        - created_at
+        - updated_at
+        - server_updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: [string, "null"]
+        exercise_count:
+          type: integer
+          minimum: 0
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        server_updated_at:
+          type: string
+          format: date-time
+        deleted_at:
+          type: [string, "null"]
+          format: date-time
+
+    PlanPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Plan'
+        next_cursor:
+          type: [string, "null"]
+
+    PlanSummaryPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlanSummary'
+        next_cursor:
+          type: [string, "null"]
+
+    # --- progress -----------------------------------------------------------
+    ProgressSetInput:
+      type: object
+      required: [position, type, completed]
+      additionalProperties: false
+      properties:
+        position:
+          type: integer
+          minimum: 0
+        type:
+          $ref: '#/components/schemas/SetType'
+        reps:
+          type: [integer, "null"]
+          minimum: 0
+        weight:
+          oneOf:
+            - $ref: '#/components/schemas/Weight'
+            - type: "null"
+        duration_seconds:
+          type: [integer, "null"]
+          minimum: 0
+        distance_meters:
+          oneOf:
+            - $ref: '#/components/schemas/DistanceMeters'
+            - type: "null"
+        rpe:
+          oneOf:
+            - $ref: '#/components/schemas/Rpe'
+            - type: "null"
+        completed:
+          type: boolean
+
+    ProgressExerciseInput:
+      type: object
+      required: [exercise_id, position, sets]
+      additionalProperties: false
+      properties:
+        exercise_id:
+          type: string
+          format: uuid
+        position:
+          type: integer
+          minimum: 0
+        notes:
+          type: [string, "null"]
+          maxLength: 1000
+        sets:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/ProgressSetInput'
+
+    ProgressInput:
+      type: object
+      required: [name, started_at, ended_at, duration_seconds, updated_at, exercises]
+      additionalProperties: false
+      properties:
+        workout_plan_id:
+          type: [string, "null"]
+          format: uuid
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        notes:
+          type: [string, "null"]
+          maxLength: 2000
+        started_at:
+          type: string
+          format: date-time
+        ended_at:
+          type: string
+          format: date-time
+          description: Must be >= `started_at`.
+        duration_seconds:
+          type: integer
+          minimum: 0
+          maximum: 86400
+        updated_at:
+          type: string
+          format: date-time
+          description: Client's last-modified time; conflict-rule input. At most 5 minutes in the future.
+        exercises:
+          type: array
+          maxItems: 50
+          description: May be empty. Positions must be unique within their parent.
+          items:
+            $ref: '#/components/schemas/ProgressExerciseInput'
+
+    ProgressSet:
+      type: object
+      required: [position, type, completed]
+      properties:
+        position:
+          type: integer
+          minimum: 0
+        type:
+          $ref: '#/components/schemas/SetType'
+        reps:
+          type: [integer, "null"]
+          minimum: 0
+        weight:
+          oneOf:
+            - $ref: '#/components/schemas/Weight'
+            - type: "null"
+        duration_seconds:
+          type: [integer, "null"]
+          minimum: 0
+        distance_meters:
+          oneOf:
+            - $ref: '#/components/schemas/DistanceMeters'
+            - type: "null"
+        rpe:
+          oneOf:
+            - $ref: '#/components/schemas/Rpe'
+            - type: "null"
+        completed:
+          type: boolean
+
+    ProgressExercise:
+      type: object
+      required: [exercise_id, position, sets]
+      properties:
+        exercise_id:
+          type: string
+          format: uuid
+        position:
+          type: integer
+          minimum: 0
+        notes:
+          type: [string, "null"]
+        sets:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProgressSet'
+
+    Progress:
+      type: object
+      required:
+        - id
+        - name
+        - started_at
+        - ended_at
+        - duration_seconds
+        - updated_at
+        - created_at
+        - server_updated_at
+        - exercises
+      properties:
+        id:
+          type: string
+          format: uuid
+        workout_plan_id:
+          type: [string, "null"]
+          format: uuid
+        name:
+          type: string
+        notes:
+          type: [string, "null"]
+        started_at:
+          type: string
+          format: date-time
+        ended_at:
+          type: string
+          format: date-time
+        duration_seconds:
+          type: integer
+          minimum: 0
+          maximum: 86400
+        updated_at:
+          type: string
+          format: date-time
+          description: Client's last-modified time (conflict-rule input).
+        created_at:
+          type: string
+          format: date-time
+        server_updated_at:
+          type: string
+          format: date-time
+          description: Server sync cursor; set on every accepted write and delete.
+        deleted_at:
+          type: [string, "null"]
+          format: date-time
+        exercises:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProgressExercise'
+
+    ProgressSummary:
+      type: object
+      required:
+        - id
+        - name
+        - started_at
+        - ended_at
+        - duration_seconds
+        - exercise_count
+        - set_count
+        - updated_at
+        - server_updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        workout_plan_id:
+          type: [string, "null"]
+          format: uuid
+        name:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        ended_at:
+          type: string
+          format: date-time
+        duration_seconds:
+          type: integer
+          minimum: 0
+        exercise_count:
+          type: integer
+          minimum: 0
+        set_count:
+          type: integer
+          minimum: 0
+        updated_at:
+          type: string
+          format: date-time
+        server_updated_at:
+          type: string
+          format: date-time
+        deleted_at:
+          type: [string, "null"]
+          format: date-time
+
+    ProgressPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Progress'
+        next_cursor:
+          type: [string, "null"]
+
+    ProgressSummaryPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProgressSummary'
+        next_cursor:
+          type: [string, "null"]
+
+    # --- ops ----------------------------------------------------------------
+    HealthStatus:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok, unavailable]

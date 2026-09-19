@@ -1,0 +1,330 @@
+# Workout Tracker BE — example requests (T8 handover).
+#
+# Format: HTTP / REST-client ".http" (JetBrains HTTP Client, VS Code REST Client).
+# Run top to bottom: later requests use variables captured from earlier
+# responses (`client.global.set`). For VS Code REST Client, replace the
+# `> {% ... %}` blocks with `{{login.response.body.$.access_token}}` style
+# references, or paste the values into the variables below.
+#
+# Expected statuses are noted as comments. Responses are the shapes documented in
+# ../openapi.yaml.
+
+@baseUrl = https://api.example.com
+
+# Credentials (replace).
+@adminUsername = admin
+@adminPassword = changeme
+@username = ihsan
+@password = 123
+
+# Client-generated UUIDs (the app generates these; fixed here for a clean run).
+@progressId = 0195f3a2-cccc-7000-8000-000000000100
+@planId = 0195f3a2-aaaa-7000-8000-000000000001
+@exerciseId = 0195f3a2-bbbb-7000-8000-000000000010
+@exerciseId2 = 0195f3a2-bbbb-7000-8000-000000000011
+
+
+### Liveness probe (anonymous)
+# → 200 {"status":"ok"}
+GET {{baseUrl}}/healthz
+
+
+### 1) Admin login (captures the admin token)
+# → 200
+POST {{baseUrl}}/v1/auth/login
+Content-Type: application/json
+
+{
+  "username": "{{adminUsername}}",
+  "password": "{{adminPassword}}",
+  "device_name": "Admin console"
+}
+
+> {%
+    client.global.set("adminToken", response.body.access_token);
+%}
+
+
+### 2) Register a user (admin only, endpoint 1)
+# → 201
+POST {{baseUrl}}/v1/auth/register
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "username": "{{username}}",
+  "password": "{{password}}"
+}
+
+> {%
+    client.global.set("userId", response.body.id);
+%}
+
+
+### 3) User login (captures the user token)
+# → 200
+POST {{baseUrl}}/v1/auth/login
+Content-Type: application/json
+
+{
+  "username": "{{username}}",
+  "password": "{{password}}",
+  "device_name": "Ihsan's iPhone"
+}
+
+> {%
+    client.global.set("userToken", response.body.access_token);
+    client.global.set("tokenId", response.body.token_id);
+%}
+
+
+### 4) List exercises (endpoint 8)
+# → 200 {items:[...], next_cursor}
+GET {{baseUrl}}/v1/exercises?limit=50
+Authorization: Bearer {{userToken}}
+
+
+### 5) Create an exercise (endpoint 9)
+# → 201 (same id + identical body again → 200, idempotent retry)
+POST {{baseUrl}}/v1/exercises
+Authorization: Bearer {{userToken}}
+Content-Type: application/json
+
+{
+  "id": "{{exerciseId}}",
+  "name": "Bench Press",
+  "category": "strength",
+  "primary_muscle_group": "chest",
+  "secondary_muscle_groups": ["triceps", "shoulders"],
+  "equipment": "barbell",
+  "measurement_type": "reps_weight",
+  "instructions": "Lie on bench, grip slightly wider than shoulders."
+}
+
+> {%
+    client.global.set("exerciseId", response.body.id);
+%}
+
+### 5b) Duplicate name → 409 already_exists
+# → 409 conflict (details[0].issue = "already_exists", details[0].existing_id)
+POST {{baseUrl}}/v1/exercises
+Authorization: Bearer {{userToken}}
+Content-Type: application/json
+
+{
+  "name": "Bench Press",
+  "category": "strength",
+  "primary_muscle_group": "chest",
+  "equipment": "barbell",
+  "measurement_type": "reps_weight"
+}
+
+
+### 6) Set the exercise image (endpoint 20)
+# Body is raw bytes, Content-Type image/jpeg|image/png|image/webp, max 2 MiB.
+# → 200 (exercise with a non-null image_url)
+PUT {{baseUrl}}/v1/exercises/{{exerciseId}}/image
+Authorization: Bearer {{userToken}}
+Content-Type: image/jpeg
+
+< ./bench-press.jpg
+
+
+### 7) Save a completed session (endpoint 3, create)
+# → 201 (new), 200 (update or no-op)
+PUT {{baseUrl}}/v1/progress/{{progressId}}
+Authorization: Bearer {{userToken}}
+Content-Type: application/json
+
+{
+  "workout_plan_id": "{{planId}}",
+  "name": "Push Day A",
+  "notes": "Felt strong",
+  "started_at": "2026-09-19T08:00:00Z",
+  "ended_at": "2026-09-19T08:55:00Z",
+  "duration_seconds": 3120,
+  "updated_at": "2026-09-19T08:55:02Z",
+  "exercises": [
+    {
+      "exercise_id": "{{exerciseId}}",
+      "position": 0,
+      "notes": null,
+      "sets": [
+        {
+          "position": 0,
+          "type": "warmup",
+          "reps": 12,
+          "weight": 40.0,
+          "duration_seconds": null,
+          "distance_meters": null,
+          "rpe": null,
+          "completed": true
+        },
+        {
+          "position": 1,
+          "type": "normal",
+          "reps": 8,
+          "weight": 80.0,
+          "duration_seconds": null,
+          "distance_meters": null,
+          "rpe": 8.5,
+          "completed": true
+        }
+      ]
+    }
+  ]
+}
+
+### 7b) Stale re-save (older updated_at than stored)
+# → 409 conflict (details[0].issue = "stale", details[0].current = server copy)
+PUT {{baseUrl}}/v1/progress/{{progressId}}
+Authorization: Bearer {{userToken}}
+Content-Type: application/json
+
+{
+  "name": "Push Day A",
+  "started_at": "2026-09-19T08:00:00Z",
+  "ended_at": "2026-09-19T08:55:00Z",
+  "duration_seconds": 3120,
+  "updated_at": "2026-09-19T08:00:00Z",
+  "exercises": []
+}
+
+### 7c) Equal updated_at (safe retry after a lost response, no change)
+# → 200 (stored copy)
+PUT {{baseUrl}}/v1/progress/{{progressId}}
+Authorization: Bearer {{userToken}}
+Content-Type: application/json
+
+{
+  "name": "Push Day A",
+  "started_at": "2026-09-19T08:00:00Z",
+  "ended_at": "2026-09-19T08:55:00Z",
+  "duration_seconds": 3120,
+  "updated_at": "2026-09-19T08:55:02Z",
+  "exercises": []
+}
+
+
+### 8) Get one session (endpoint 4)
+# → 200 (full Progress with exercises[].sets[])
+GET {{baseUrl}}/v1/progress/{{progressId}}
+Authorization: Bearer {{userToken}}
+
+
+### 9) Sync pull: list + updated_since + expand=exercises (endpoint 5)
+# → 200 (full sessions, soft-deleted rows included, next_cursor null on last page)
+GET {{baseUrl}}/v1/progress?updated_since=1970-01-01T00:00:00Z&expand=exercises&limit=200
+Authorization: Bearer {{userToken}}
+
+
+### 10) Save a workout plan (endpoint 10, create)
+# → 201 (new), 200 (update or no-op)
+PUT {{baseUrl}}/v1/workout-plans/{{planId}}
+Authorization: Bearer {{userToken}}
+Content-Type: application/json
+
+{
+  "name": "Push",
+  "description": "Chest / shoulders / triceps",
+  "updated_at": "2026-09-19T09:00:00Z",
+  "exercises": [
+    {
+      "exercise_id": "{{exerciseId}}",
+      "position": 0,
+      "target_sets": 4,
+      "target_reps": 8,
+      "target_reps_max": 10,
+      "target_weight": 80.0,
+      "target_duration_seconds": null,
+      "target_distance_meters": null,
+      "rest_seconds": 120,
+      "notes": "Pause on chest"
+    }
+  ]
+}
+
+
+### 11) Get one plan (endpoint 7)
+# → 200
+GET {{baseUrl}}/v1/workout-plans/{{planId}}
+Authorization: Bearer {{userToken}}
+
+
+### 12) List workout plans with sync + expand (endpoint 6)
+# → 200
+GET {{baseUrl}}/v1/workout-plans?updated_since=1970-01-01T00:00:00Z&expand=exercises&limit=200
+Authorization: Bearer {{userToken}}
+
+
+### 13) List the caller's active tokens (endpoint 15)
+# → 200 {items:[{id, device_name, created_at, last_used_at, expires_at, current}]}
+GET {{baseUrl}}/v1/auth/tokens
+Authorization: Bearer {{userToken}}
+
+
+### 14) Revoke the current device's token (endpoint 11)
+# → 204; a second call with the same token → 401
+POST {{baseUrl}}/v1/auth/logout
+Authorization: Bearer {{userToken}}
+
+
+### 14b) Revoke all other devices (endpoint 12)
+# → 200 {"revoked_count": N}
+POST {{baseUrl}}/v1/auth/revoke
+Authorization: Bearer {{userToken}}
+Content-Type: application/json
+
+{
+  "scope": "others"
+}
+
+
+### 15) Admin force-logs-out a user (endpoint 13)
+# → 200 {"revoked_count": N} (idempotent)
+POST {{baseUrl}}/v1/admin/users/{{username}}/revoke-login
+Authorization: Bearer {{adminToken}}
+
+
+### 16) Admin changes a user's password (endpoint 14)
+# → 204 (revokes the target's tokens)
+PUT {{baseUrl}}/v1/admin/users/{{username}}/password
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "password": "newpass"
+}
+
+
+### 17) Upload with the wrong media type → 415
+# → 415 unsupported_media_type (header and sniffed bytes must both be JPEG/PNG/WebP)
+PUT {{baseUrl}}/v1/exercises/{{exerciseId}}/image
+Authorization: Bearer {{userToken}}
+Content-Type: text/plain
+
+not an image
+
+
+### 18) Delete the exercise image (endpoint 21)
+# → 204 (idempotent: no image also 204)
+DELETE {{baseUrl}}/v1/exercises/{{exerciseId}}/image
+Authorization: Bearer {{userToken}}
+
+
+### 19) Delete an exercise (endpoint 19)
+# → 204 (idempotent); a later PUT to the same id → 409 deleted
+DELETE {{baseUrl}}/v1/exercises/{{exerciseId}}
+Authorization: Bearer {{userToken}}
+
+
+### 20) Delete a workout plan (endpoint 17)
+# → 204 (idempotent)
+DELETE {{baseUrl}}/v1/workout-plans/{{planId}}
+Authorization: Bearer {{userToken}}
+
+
+### 21) Delete a progress session (endpoint 16)
+# → 204 (idempotent); still visible to sync with updated_since (deleted_at set)
+DELETE {{baseUrl}}/v1/progress/{{progressId}}
+Authorization: Bearer {{userToken}}
