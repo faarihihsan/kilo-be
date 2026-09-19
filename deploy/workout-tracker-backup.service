@@ -1,0 +1,38 @@
+# One backup run: database dump + media copied off the VPS (deploy/backup.sh).
+# Started nightly by workout-tracker-backup.timer; run it by hand with
+#   systemctl start workout-tracker-backup.service && journalctl -u workout-tracker-backup -e
+# Install both files into /etc/systemd/system/. A failed run shows up as a
+# failed unit (`systemctl list-units --failed`) and, if BACKUP_HEALTHCHECK_URL
+# is set, as a missing ping.
+
+[Unit]
+Description=Workout Tracker backup (database dump and media, copied off the VPS)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=workout
+Group=workout
+# Same file as the server, so the script sees DATABASE_URL, MEDIA_DIR and the
+# BACKUP_* settings. systemd parses it; the script must not `source` it.
+EnvironmentFile=/etc/workout-tracker/env
+ExecStart=/opt/workout-tracker/backup.sh
+
+# Do not compete with the API for CPU and disk while it is serving requests.
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=2h
+
+NoNewPrivileges=true
+ProtectSystem=strict
+# Local staging directory, must equal BACKUP_DIR and exist before the first run.
+ReadWritePaths=/var/backups/workout-tracker
+# (rclone backends that refresh OAuth tokens, such as Drive or Dropbox, rewrite
+# their config file: add its directory here too. S3/B2-style keys need nothing.)
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true

@@ -1,0 +1,47 @@
+# Caddy 2 reverse proxy for the workout-tracker API (docs/implementation-plan.md
+# section 8). Install as /etc/caddy/Caddyfile, then `systemctl reload caddy`.
+#
+# Caddy obtains and renews the TLS certificate by itself (the DNS A/AAAA record
+# must point at this server and ports 80 and 443 must be open) and redirects
+# http:// to https:// automatically. HTTPS is mandatory: bearer tokens travel
+# in headers and passwords in login bodies.
+
+# Optional: an address for Let's Encrypt expiry notices.
+# {
+# 	email you@example.com
+# }
+
+# TODO: replace with the real API host name.
+api.example.com {
+	# Compress responses when the client supports it.
+	encode zstd gzip
+
+	# Exercise images: /media/exercises/{exercise_id}/{hash}.{ext} is public
+	# and served straight from disk, so requests never reach the Go app.
+	# handle_path strips the /media prefix before file_server looks up the file:
+	#   GET /media/exercises/{id}/{hash}.webp -> <root>/exercises/{id}/{hash}.webp
+	# This root MUST equal MEDIA_DIR in /etc/workout-tracker/env. The `caddy`
+	# user needs read access to it (directories 0755, files 0644).
+	handle_path /media/* {
+		root * /var/lib/workout-tracker/media
+
+		# The file name contains the content hash and changes with the image,
+		# so a cached copy can never be stale.
+		header X-Content-Type-Options "nosniff"
+		@found file
+		header @found Cache-Control "public, max-age=31536000, immutable"
+
+		# No `browse`: directory listings are off, so only files whose exact
+		# name is known can be fetched.
+		file_server
+	}
+
+	# Everything else is the JSON API on localhost. Caddy sets X-Forwarded-For
+	# (client IP appended), X-Forwarded-Proto and X-Forwarded-Host by default
+	# and, because no trusted_proxies are configured, first discards any such
+	# headers sent by the client, so they cannot be spoofed. The app must only
+	# trust them from this proxy: TRUSTED_PROXY_CIDRS=127.0.0.1/32.
+	handle {
+		reverse_proxy 127.0.0.1:8080
+	}
+}

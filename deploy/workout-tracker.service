@@ -1,0 +1,73 @@
+# systemd unit for the workout-tracker API (docs/implementation-plan.md
+# section 8). Install as /etc/systemd/system/workout-tracker.service, then:
+#   systemctl daemon-reload && systemctl enable --now workout-tracker
+#
+# Run exactly ONE instance. The login rate limiter lives in process memory, so a
+# second copy (another unit, Docker, a blue/green overlap) would give attackers
+# a second set of guesses and break the brute-force limits.
+
+[Unit]
+Description=Workout Tracker API
+After=network-online.target postgresql.service
+Wants=network-online.target postgresql.service
+# A failing migration or bad config must not restart in a tight loop:
+# at most 5 starts per 5 minutes, then the unit stays failed.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=workout
+Group=workout
+
+# Configuration (see deploy/env.example). It holds the database password:
+# owner root, `chmod 600 /etc/workout-tracker/env`. systemd reads it as root
+# before dropping to the workout user.
+EnvironmentFile=/etc/workout-tracker/env
+
+# Apply pending schema migrations, then serve. If migrate fails the service does
+# not start and the previous schema is left as it was. Migrations are
+# forward-only; take a backup before deploying a release that adds one.
+ExecStartPre=/opt/workout-tracker/server migrate up
+ExecStart=/opt/workout-tracker/server serve
+
+Restart=on-failure
+RestartSec=5
+# Time for in-flight requests to finish after SIGTERM.
+TimeoutStopSec=30
+
+# Files the server creates (exercise images) must be readable by Caddy, which
+# serves /media/ straight from disk: directories 0755, files 0644.
+UMask=0022
+LimitNOFILE=65535
+
+# Hardening. The server needs the network and write access to the media
+# directory only.
+NoNewPrivileges=true
+ProtectSystem=strict
+# Must equal MEDIA_DIR and must exist before the service starts (systemd fails
+# with status 226/NAMESPACE otherwise): install -d -o workout -g workout /var/lib/workout-tracker/media
+ReadWritePaths=/var/lib/workout-tracker/media
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+
+# Logs are JSON on stdout and land in journald: journalctl -u workout-tracker -o cat
+SyslogIdentifier=workout-tracker
+
+[Install]
+WantedBy=multi-user.target
