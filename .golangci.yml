@@ -1,0 +1,44 @@
+# golangci-lint v2 configuration. Deliberately small: only linters that find
+# real bugs, none that argue about style. Formatting is enforced by gofmt
+# (also checked separately in CI).
+# Run locally with `make lint`; CI pins the version in .github/workflows/ci.yml.
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  # Start from nothing so a golangci-lint upgrade never turns on new linters
+  # by surprise. Add to this list on purpose.
+  default: none
+  enable:
+    - errcheck      # unchecked errors, the classic Go bug
+    - govet         # vet checks (also run separately by `go vet`)
+    - ineffassign   # assignments whose value is never used
+    - staticcheck   # SA/S/ST checks (merges the old gosimple and stylecheck)
+    - unused        # unused code
+    - misspell      # typos in comments and strings
+  settings:
+    staticcheck:
+      # golangci-lint's default set minus the quickfix (QF) suggestions, which
+      # are refactoring hints (De Morgan, tagged switch, ...) rather than bugs.
+      checks:
+        - all
+        - -ST1000
+        - -ST1003
+        - -ST1016
+        - -ST1020
+        - -ST1021
+        - -ST1022
+        - -QF*
+  exclusions:
+    generated: lax
+    presets:
+      # Ignore the noisy but harmless cases: unchecked Close/Flush/Remove and
+      # fmt.Print*/os.Setenv results.
+      - std-error-handling
+
+formatters:
+  enable:
+    - gofmt

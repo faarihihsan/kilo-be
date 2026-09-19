@@ -1,0 +1,17 @@
+# Nightly trigger for workout-tracker-backup.service.
+#   systemctl enable --now workout-tracker-backup.timer
+#   systemctl list-timers workout-tracker-backup.timer
+# Times are in the server's local time zone.
+
+[Unit]
+Description=Nightly Workout Tracker backup
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+# Spread the start a little so it never lines up with other jobs.
+RandomizedDelaySec=15m
+# Run at boot if the VPS was down at 03:30.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

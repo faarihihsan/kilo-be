@@ -1,0 +1,93 @@
+name: CI
+
+# Runs on every pull request and on pushes to main. The Go version comes from
+# go.mod (toolchain line), so CI and local builds cannot drift apart.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch/PR cancels the run it makes obsolete.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-formatted (run 'gofmt -w .'):"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go mod tidy leaves go.mod and go.sum unchanged
+        run: |
+          go mod tidy
+          if ! git diff --exit-code -- go.mod go.sum; then
+            echo "::error::go.mod/go.sum are not tidy. Run 'go mod tidy' and commit the result."
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      # install-mode goinstall builds golangci-lint with the Go from setup-go
+      # above. The prebuilt binary may be built with an older Go than go.mod
+      # targets, and golangci-lint refuses to analyse code newer than itself.
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.13.2
+          install-mode: goinstall
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      # Latest stable PostgreSQL major (18 as of 2026-09; 19 is still beta).
+      # Keep in step with the version on the VPS. The postgres superuser lets
+      # the test harness create throwaway databases (see TEST_DATABASE_URL).
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # Admin connection: internal/testutil creates a fresh database per test
+      # package from this URL and drops it afterwards.
+      TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: go test -race
+        run: go test -race ./...
