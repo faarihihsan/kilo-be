@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -66,62 +65,20 @@ func progressScan(row progressScanner, p *domain.Progress, dest ...any) error {
 // When two requests insert the same new id at once, the loser fails on the
 // primary key and runs once more, now finding the winner's row.
 func (s *Progress) Save(ctx context.Context, userID, id uuid.UUID, in domain.ProgressSave) (domain.Progress, bool, error) {
-	var (
-		out     domain.Progress
-		created bool
-	)
-	attempt := func() error {
-		return s.db.WithTx(ctx, func(ctx context.Context, tx pgx.Tx) error {
-			var err error
-			out, created, err = progressSave(ctx, tx, userID, id, in)
-			return err
-		})
-	}
-	err := attempt()
-	if c, ok := IsUniqueViolation(err); ok && c == "progress_pkey" {
-		err = attempt()
-	}
-	if err != nil {
-		return domain.Progress{}, false, err
-	}
-	return out, created, nil
+	return saveWithRetry(ctx, s.db, "progress_pkey", func(ctx context.Context, tx pgx.Tx) (domain.Progress, bool, error) {
+		return progressSave(ctx, tx, userID, id, in)
+	})
 }
 
 func progressSave(ctx context.Context, tx pgx.Tx, userID, id uuid.UUID, in domain.ProgressSave) (domain.Progress, bool, error) {
-	var (
-		owner     uuid.UUID
-		state     domain.SyncState
-		deletedAt *time.Time
-	)
-	err := tx.QueryRow(ctx,
-		`SELECT user_id, client_updated_at, deleted_at FROM progress WHERE id = $1 FOR UPDATE`, id,
-	).Scan(&owner, &state.ClientUpdatedAt, &deletedAt)
-
-	var existing *domain.SyncState
-	switch {
-	case errors.Is(err, pgx.ErrNoRows):
-	case err != nil:
-		return domain.Progress{}, false, fmt.Errorf("store: lock progress: %w", err)
-	case owner != userID:
-		return domain.Progress{}, false, domain.NewNotFound()
-	default:
-		state.Deleted = deletedAt != nil
-		existing = &state
+	action, err := lockForSync(ctx, tx, "progress", "progress", userID, id, in.UpdatedAt)
+	if err != nil {
+		return domain.Progress{}, false, err
 	}
-
-	action := domain.DecideSync(existing, in.UpdatedAt)
-	switch action {
-	case domain.SyncDeleted:
-		return domain.Progress{}, false, action.Err(nil)
-	case domain.SyncStale, domain.SyncNoop:
-		cur, err := progressLoad(ctx, tx, "p.id = $1", id)
-		if err != nil {
-			return domain.Progress{}, false, err
-		}
-		if action == domain.SyncStale {
-			return domain.Progress{}, false, action.Err(cur)
-		}
-		return cur, false, nil
+	if cur, done, err := syncPreflight(action, func() (domain.Progress, error) {
+		return progressLoad(ctx, tx, "p.id = $1", id)
+	}); done {
+		return cur, false, err
 	}
 
 	if err := progressCheckRefs(ctx, tx, userID, in); err != nil {
@@ -190,22 +147,8 @@ func progressCheckRefs(ctx context.Context, q Querier, userID uuid.UUID, in doma
 	for _, e := range in.Exercises {
 		ids = append(ids, e.ExerciseID)
 	}
-	rows, err := q.Query(ctx, `SELECT id FROM exercises WHERE id = ANY($1)`, ids)
-	if err != nil {
-		return fmt.Errorf("store: check exercises: %w", err)
-	}
-	known, err := pgx.CollectRows(rows, pgx.RowTo[uuid.UUID])
-	if err != nil {
-		return fmt.Errorf("store: check exercises: %w", err)
-	}
-	exists := make(map[uuid.UUID]struct{}, len(known))
-	for _, id := range known {
-		exists[id] = struct{}{}
-	}
-	for i, e := range in.Exercises {
-		if _, ok := exists[e.ExerciseID]; !ok {
-			v.Add(domain.FieldIndex("exercises", i)+".exercise_id", domain.IssueUnknownReference)
-		}
+	if err := addExerciseRefIssues(ctx, q, ids, &v); err != nil {
+		return err
 	}
 	return v.Err()
 }
@@ -307,7 +250,7 @@ func progressText(d *domain.ProgressDecimal) *string {
 // exist, is soft-deleted or belongs to another user is NotFound.
 func (s *Progress) Get(ctx context.Context, userID, id uuid.UUID) (domain.Progress, error) {
 	var out domain.Progress
-	err := s.db.WithTxOptions(ctx, progressReadOnly, func(ctx context.Context, tx pgx.Tx) error {
+	err := s.db.WithTxOptions(ctx, readOnlyTx, func(ctx context.Context, tx pgx.Tx) error {
 		var err error
 		out, err = progressLoad(ctx, tx, "p.id = $1 AND p.user_id = $2 AND p.deleted_at IS NULL", id, userID)
 		return err
@@ -317,10 +260,6 @@ func (s *Progress) Get(ctx context.Context, userID, id uuid.UUID) (domain.Progre
 	}
 	return out, nil
 }
-
-// progressReadOnly gives a read of a parent row and its children one snapshot,
-// so a concurrent save is seen entirely or not at all.
-var progressReadOnly = pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}
 
 // progressLoad reads the one session matching cond (a WHERE condition on p
 // with its args) and its children, or returns NotFound.
@@ -439,7 +378,7 @@ func (s *Progress) ListExpanded(ctx context.Context, userID uuid.UUID, f domain.
 		out  []domain.Progress
 		next *domain.Cursor
 	)
-	err := s.db.WithTxOptions(ctx, progressReadOnly, func(ctx context.Context, tx pgx.Tx) error {
+	err := s.db.WithTxOptions(ctx, readOnlyTx, func(ctx context.Context, tx pgx.Tx) error {
 		rows, n, err := progressPage(ctx, tx, userID, f, after, limit, false)
 		if err != nil {
 			return err
@@ -489,8 +428,8 @@ func progressPage(ctx context.Context, q Querier, userID uuid.UUID, f domain.Pro
 	}
 
 	var next *domain.Cursor
-	if len(out) > limit {
-		out = out[:limit]
+	if page, ok := pageOf(out, limit); ok {
+		out = page
 		last := out[limit-1]
 		next = &domain.Cursor{At: last.StartedAt, ID: last.ID}
 		if f.UpdatedSince != nil {
@@ -570,14 +509,5 @@ func (s *Progress) SoftDelete(ctx context.Context, userID, id uuid.UUID) error {
 	if tag.RowsAffected() == 1 {
 		return nil
 	}
-	var owned bool
-	err = s.db.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM progress WHERE id = $1 AND user_id = $2)`, id, userID).Scan(&owned)
-	if err != nil {
-		return fmt.Errorf("store: delete progress: %w", err)
-	}
-	if !owned {
-		return domain.NewNotFound()
-	}
-	return nil
+	return softDeleteAnswer(ctx, s.db, "progress", "progress", id, userID)
 }
