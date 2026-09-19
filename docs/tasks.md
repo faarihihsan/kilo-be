@@ -1,6 +1,6 @@
 # Task Breakdown
 
-Status: **plan only, nothing started.** Derived from the [implementation plan](implementation-plan.md), [data model](data-model.md) and the 21 endpoint specs. Purpose: split the work so several subagents can run in parallel without stepping on each other.
+Status: **Wave 0 done (T0.1–T0.9 merged on `main`); Wave 1 next.** Derived from the [implementation plan](implementation-plan.md), [data model](data-model.md) and the 21 endpoint specs. Purpose: split the work so several subagents can run in parallel without stepping on each other.
 
 Legend: **∥** = subtasks inside a task can run in parallel. **Owns** = only files this task may write. **Gate** = what must be merged before it starts. Milestone column maps to [§10 of the plan](implementation-plan.md#10-build-order-and-milestones).
 
@@ -177,7 +177,7 @@ Same shape and conventions as T3, three-level children. Do not copy code from T3
 
 ## 5. Wave 3: integration and hardening (M7) — gate: T3, T4, T5, T6 merged
 
-Test files are disjoint, so T7.1–T7.4 run in parallel in `internal/httpapi/e2e/`.
+Test files are disjoint, so T7.1–T7.4 run in parallel as `cmd/server/e2e_*_test.go` (they need `newApp` from `package main`; a package cannot import `main`).
 
 - T7.1 ∥ Full-stack role matrix: anonymous / user / admin × all 21 routes; expired and revoked tokens.
 - T7.2 ∥ Ownership: user B never sees user A's plans or progress (404) on every read/write/delete route.
@@ -194,15 +194,35 @@ OpenAPI 3.1 built from the endpoint specs plus example requests (`.http` or curl
 
 ## 7. File ownership and seams
 
-Each task writes only its **Owns** files. These shared files are **seams**: agents do not edit them; they report the need instead and the orchestrator applies it.
+Each task writes only its **Owns** files. T0.9 created one stub file per resource at every layer, with fixed signatures pinned by `seams_test.go` in `store`, `service` and `handlers` (changing one breaks the build). A task **overwrites its own stub files** and never edits another task's.
 
-| Seam | Fixed at | Rule |
-|------|----------|------|
-| `go.mod`, `go.sum` | T0.1 | All deps added up front. Need a new one → report. |
-| `internal/httpapi/router.go` | T0.5 | All 21 routes already registered; tasks replace handler bodies only. |
-| `cmd/server/main.go`, `wire.go` | T0.9 | Constructor signatures are fixed (`NewX(deps Deps)`); tasks fill bodies. |
-| `migrations/**` | T0.4 | Whole schema exists after Wave 0. Schema change → orchestrator adds `0006+`. |
-| `internal/domain` enums/limits/errors | T0.1 | Extend only in own `domain/<resource>.go` file. |
+| Layer | Stub files (owner overwrites) | Fixed signature |
+|-------|-------------------------------|-----------------|
+| store | `users.go`, `auth_tokens.go` (T1); `exercises.go` (T2); `plans.go` (T3); `progress.go` (T4) | `NewX(db *DB) *X` |
+| service | `auth.go`, `admin.go` (T5); `exercises.go` (T2); `exercise_images.go` (T6); `plans.go` (T3); `progress.go` (T4) | `NewX(d service.Deps) *X` |
+| handlers | same names as service | `NewX(svc *service.X, d handlers.Deps) *X`, methods `func (h *X) Name(w, r)` |
+
+Shared files (report or coordinate; do not edit unless listed):
+
+| Seam | Rule |
+|------|------|
+| `go.mod`, `go.sum`, `internal/deps/deps.go` | All deps already added. Need a new one → report. `deps.go` is removed in T7.5. |
+| `internal/httpapi/router.go`, `routes.go` | All 21 routes registered; never edited by resource tasks. |
+| `service.Deps`, `cmd/server/wire.go` | Only T1 edits (Authenticator, RateLimit, Hasher, Limiter fields). T6 uses `Deps.Media`, already there. |
+| `cmd/server/serve.go` `startBackground` | Only T5 edits (token purge). |
+| `cmd/server/admin.go` / `media.go` | T5 / T6 rewrite wholesale. Shared test helpers live in `cmd/server/helpers_test.go`; prefix new ones. |
+| `migrations/**` | Whole schema exists. Schema change → orchestrator adds `0006+`. |
+| `internal/domain` | Add only your own `domain/<resource>.go`. |
+
+Constraint and index names to match in store code (from T0.4): `<table>_<cols>_uniq|_fkey|_chk|_idx`, e.g. `users_username_uniq`, `exercises_name_lower_uniq`. Name search must use `lower(name) LIKE '%' || lower($1) || '%'` to hit the trigram index.
+
+## 7b. Operating notes (learned in Wave 0)
+
+- **Worktrees:** the orchestrator creates one per agent: `.worktrees/<wave>-<name>` on branch `<wave>/<name>` (git-ignored), agents commit there, orchestrator merges into `main` and removes them. The built-in `isolation: "worktree"` does not work in this session.
+- **Go toolchain:** `go.mod` needs Go 1.27; the shell has `GOTOOLCHAIN=local`. Use `export GOTOOLCHAIN=auto` or `make`. `GOPROXY` is unreachable; all modules are cached, so do not add dependencies.
+- **rtk hook** may print "Success" for a failed command; check exit codes.
+- **Test DB:** `make db-up` (postgres:18 on `127.0.0.1:55432`); `testutil.NewDB(t)` gives each test its own throwaway database, so agents can run tests concurrently.
+- **Spec decisions:** conflict extras live in `details[0]` (`current`, `existing_id`); bad `updated_since`/cursor → 400 `bad_request`; empty image body → 400.
 
 ## 8. Subagent brief (template)
 

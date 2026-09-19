@@ -65,11 +65,7 @@ func NotImplementedHandlers() Handlers {
 func (h *Handlers) fillDefaults() {
 	for _, rt := range table {
 		if f := rt.field(h); *f == nil {
-			*f = notImplemented
+			*f = render.NotImplemented
 		}
 	}
-}
-
-func notImplemented(w http.ResponseWriter, _ *http.Request) {
-	render.WriteErrorResponse(w, http.StatusNotImplemented, render.CodeNotImplemented, "This endpoint is not implemented yet.")
 }

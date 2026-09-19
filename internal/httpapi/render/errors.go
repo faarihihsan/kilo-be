@@ -214,6 +214,16 @@ func WriteErrorResponse(w http.ResponseWriter, status int, code, message string)
 	WriteJSON(w, status, NewErrorBody(code, message))
 }
 
+// MsgNotImplemented is the message of the 501 stub answer.
+const MsgNotImplemented = "This endpoint is not implemented yet."
+
+// NotImplemented answers 501 with the error code `not_implemented`. It is the
+// body of every stub handler that a resource task has not replaced yet, and
+// the router's default for a route without a handler.
+func NotImplemented(w http.ResponseWriter, _ *http.Request) {
+	WriteErrorResponse(w, http.StatusNotImplemented, CodeNotImplemented, MsgNotImplemented)
+}
+
 func writeMapped(w http.ResponseWriter, m mapped) {
 	for k, v := range m.header {
 		w.Header()[k] = v
