@@ -50,6 +50,13 @@ Configuration comes from environment variables, see deploy/env.example.
 `
 
 func main() {
+	// Load .env before anything reads configuration, so a local run works
+	// without exporting variables by hand. The real environment still wins.
+	if err := loadDotEnv(); err != nil {
+		fmt.Fprintf(os.Stderr, "server: %v\n", err)
+		os.Exit(exitError)
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	// After the first signal, restore the default behaviour: a second
 	// Ctrl-C kills a process that is stuck in shutdown.
