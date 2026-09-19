@@ -130,8 +130,8 @@ func TestProtectedRoutesRejectAnonymousRequests(t *testing.T) {
 				if rec.Code != http.StatusOK {
 					t.Errorf("status = %d, want 200", rec.Code)
 				}
-			case r.Anonymous: // login: reaches its (stub) handler
-				apitest.RequireError(t, rec, http.StatusNotImplemented, "not_implemented")
+			case r.Anonymous: // login: reaches its handler
+				requireReachedHandler(t, "anonymous", rec.Code)
 			default:
 				apitest.RequireError(t, rec, http.StatusUnauthorized, "unauthorized")
 				if got := rec.Header().Get("WWW-Authenticate"); got != "Bearer" {
@@ -143,9 +143,10 @@ func TestProtectedRoutesRejectAnonymousRequests(t *testing.T) {
 }
 
 // With an authenticator that injects a principal, the role table decides:
-// every role outside Route.Roles gets 403, every role inside reaches the stub
-// handler (501). Iterating httpapi.Routes() keeps this in sync with the
-// access matrix.
+// every role outside Route.Roles gets 403, every role inside reaches the
+// handler (whatever it answers, so the test survives handlers being
+// implemented). Iterating httpapi.Routes() keeps this in sync with the access
+// matrix.
 func TestRoleMatrixAcrossAllRoutes(t *testing.T) {
 	a, _ := newTestApp(t)
 	a.router.Authenticator = fakeAuth
@@ -165,12 +166,23 @@ func TestRoleMatrixAcrossAllRoutes(t *testing.T) {
 						t.Errorf("%s: status = %d, want 200", role, rec.Code)
 					}
 				case r.Anonymous || slices.Contains(r.Roles, role):
-					apitest.RequireError(t, rec, http.StatusNotImplemented, "not_implemented")
+					requireReachedHandler(t, string(role), rec.Code)
 				default:
 					apitest.RequireError(t, rec, http.StatusForbidden, "forbidden")
 				}
 			}
 		})
+	}
+}
+
+// requireReachedHandler fails when the request was stopped by authentication,
+// the role check or routing instead of reaching the route's handler. Handlers
+// may answer anything else (200, 400, 404 for an unknown id, 422, 501 ...).
+func requireReachedHandler(t *testing.T, who string, code int) {
+	t.Helper()
+	switch code {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusMethodNotAllowed:
+		t.Errorf("%s: status = %d, request did not reach the handler", who, code)
 	}
 }
 

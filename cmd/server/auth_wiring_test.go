@@ -43,8 +43,10 @@ func TestAppAuthenticatesWithRealTokens(t *testing.T) {
 	expired, _ := testutil.SeedToken(t, db, uid, testutil.WithTokenExpired())
 
 	// A valid user token gets through authentication and role check to the
-	// (still stubbed) handler.
-	apitest.RequireError(t, authWiringDo(h, http.MethodGet, "/v1/exercises", userToken), http.StatusNotImplemented, "not_implemented")
+	// handler (an empty exercise list for a fresh database).
+	if rec := authWiringDo(h, http.MethodGet, "/v1/exercises", userToken); rec.Code != http.StatusOK {
+		t.Errorf("valid user token: status = %d, want 200; body: %s", rec.Code, rec.Body)
+	}
 
 	// Admins are for management only.
 	apitest.RequireError(t, authWiringDo(h, http.MethodGet, "/v1/exercises", adminToken), http.StatusForbidden, "forbidden")
