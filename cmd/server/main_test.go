@@ -51,7 +51,8 @@ func TestRunUsageAndHelp(t *testing.T) {
 
 func TestRunStubbedSubcommandsFailClearly(t *testing.T) {
 	setEnv(t, nil)
-	for _, args := range [][]string{{"admin", "create-user"}, {"media", "gc"}} {
+	// admin is implemented by T5; media gc is still T6's stub.
+	for _, args := range [][]string{{"media", "gc"}} {
 		code, _, stderr := runCLI(t, args...)
 		if code != exitError {
 			t.Errorf("%v: exit code = %d, want %d", args, code, exitError)

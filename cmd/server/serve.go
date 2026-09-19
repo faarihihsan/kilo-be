@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"workout-tracker-be/internal/config"
@@ -137,8 +138,14 @@ func serveHTTP(ctx context.Context, srv *http.Server, ln net.Listener, grace tim
 // a function that blocks until they have all stopped. Every job must return
 // when ctx is cancelled; serve waits for them before it closes the database.
 //
-// T5 fills this in with the token purge job (daily, revoked or expired for more
-// than 30 days). It is the only place to start background work.
+// The only job is the daily token purge (revoked or expired for more than 30
+// days). It is the only place to start background work.
 func startBackground(ctx context.Context, deps service.Deps) (wait func()) {
-	return func() {}
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		runTokenPurge(ctx, deps, tokenPurgeInterval)
+	}()
+	return wg.Wait
 }
