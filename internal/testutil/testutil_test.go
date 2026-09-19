@@ -17,6 +17,10 @@ import (
 	"workout-tracker-be/internal/testutil"
 )
 
+// seededUsers is how many rows migrations/0001_users.sql inserts (the bootstrap
+// admin). Every fresh test database starts with them.
+const seededUsers = 1
+
 func count(t *testing.T, q store.Querier, table string) int {
 	t.Helper()
 	var n int
@@ -45,11 +49,11 @@ func TestNewDBIsolation(t *testing.T) {
 
 	testutil.SeedUser(t, a, domain.RoleUser)
 	testutil.SeedUser(t, a, domain.RoleAdmin)
-	if got := count(t, a, "users"); got != 2 {
-		t.Errorf("db a users = %d, want 2", got)
+	if got := count(t, a, "users"); got != seededUsers+2 {
+		t.Errorf("db a users = %d, want %d", got, seededUsers+2)
 	}
-	if got := count(t, b, "users"); got != 0 {
-		t.Errorf("db b sees %d users from db a, want 0", got)
+	if got := count(t, b, "users"); got != seededUsers {
+		t.Errorf("db b sees %d users, want only its %d migrated", got, seededUsers)
 	}
 }
 
@@ -57,8 +61,12 @@ func TestNewDBIsMigrated(t *testing.T) {
 	db := testutil.NewDB(t)
 	for _, table := range []string{"users", "auth_tokens", "exercises", "workout_plans",
 		"workout_plan_exercises", "progress", "progress_exercises", "progress_sets"} {
-		if got := count(t, db, table); got != 0 {
-			t.Errorf("%s has %d rows in a fresh database", table, got)
+		want := 0
+		if table == "users" {
+			want = seededUsers // the bootstrap admin from migrations/0001
+		}
+		if got := count(t, db, table); got != want {
+			t.Errorf("%s has %d rows in a fresh database, want %d", table, got, want)
 		}
 	}
 	behind, err := store.SchemaBehind(t.Context(), db.Pool().Config().ConnString())
@@ -89,11 +97,12 @@ func TestNewDBParallel(t *testing.T) {
 				t.Errorf("database %s handed out twice", name)
 			}
 
-			// Each subtest writes its own rows and must see only those.
+			// Each subtest writes its own rows and must see only those
+			// (plus the bootstrap admin from the migrations).
 			uid, _ := testutil.SeedUser(t, db, domain.RoleUser)
 			testutil.SeedToken(t, db, uid)
-			if got := count(t, db, "users"); got != 1 {
-				t.Errorf("users = %d, want 1", got)
+			if got := count(t, db, "users"); got != seededUsers+1 {
+				t.Errorf("users = %d, want %d", got, seededUsers+1)
 			}
 			if got := count(t, db, "auth_tokens"); got != 1 {
 				t.Errorf("auth_tokens = %d, want 1", got)
@@ -367,8 +376,8 @@ func TestSeedsWorkInsideATransaction(t *testing.T) {
 	if err == nil {
 		t.Fatal("WithTx returned nil")
 	}
-	if got := count(t, db, "users"); got != 0 {
-		t.Errorf("rolled-back seeds left %d users", got)
+	if got := count(t, db, "users"); got != seededUsers {
+		t.Errorf("rolled-back seeds left %d users, want only the %d migrated", got, seededUsers)
 	}
 }
 

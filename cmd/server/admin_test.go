@@ -105,7 +105,7 @@ func TestAdminCLICreateUserBypassesReservedAndReadsStdin(t *testing.T) {
 	}
 
 	withAdminStdin(t, "fromstdin\n")
-	if code, _, stderr := runCLI(t, "admin", "create-user", "--username", "admin"); code != exitOK {
+	if code, _, stderr := runCLI(t, "admin", "create-user", "--username", "root"); code != exitOK {
 		t.Fatalf("create-user: exit %d, stderr: %s", code, stderr)
 	}
 
@@ -114,7 +114,7 @@ func TestAdminCLICreateUserBypassesReservedAndReadsStdin(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	user, err := store.NewUsers(db).GetByUsername(t.Context(), "admin")
+	user, err := store.NewUsers(db).GetByUsername(t.Context(), "root")
 	if err != nil {
 		t.Fatalf("reserved name was not created: %v", err)
 	}

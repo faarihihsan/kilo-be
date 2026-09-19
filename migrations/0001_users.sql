@@ -28,6 +28,24 @@ CREATE TABLE users (
     CONSTRAINT users_role_chk CHECK (role IN ('user', 'admin'))
 );
 
+-- Bootstrap admin (username `admin`, password `admin`).
+--
+-- The hash is argon2id m=65536,t=2,p=1 computed by the application's hasher
+-- (auth.Hasher); SQL cannot compute it. Verify reads the parameters out of the
+-- string, so changing ARGON2_* later does not lock this account out.
+--
+-- SECURITY: this is a well-known credential and this migration runs in every
+-- environment. The HTTP API only ever creates role `user` and reserves the name
+-- `admin` (spec 01); this row exists so a fresh database has one admin that can
+-- register real users. Rotate it on any real deployment:
+--   server admin reset-password --username admin
+INSERT INTO users (id, username, password_hash, role) VALUES (
+    '0195f3a2-5eed-7000-8000-000000000001',
+    'admin',
+    '$argon2id$v=19$m=65536,t=2,p=1$6V6OUEUCj3wOSc1n+OsZMg$wRrl0ounlJtHg83CCxAsyiuSVKRbylyb1e03yZUlv2s',
+    'admin'
+);
+
 -- +goose Down
 DROP TABLE users;
 DROP EXTENSION IF EXISTS pg_trgm;

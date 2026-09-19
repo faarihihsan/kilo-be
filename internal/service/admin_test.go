@@ -150,12 +150,12 @@ func TestAdminChangePasswordErrors(t *testing.T) {
 func TestAdminCreateUserCLIAllowsAdminAndReservedNames(t *testing.T) {
 	f := newAuthFixture(t)
 
-	res, err := f.admin.CreateUser(t.Context(), CreateUserRequest{Username: "admin", Password: "pw", Role: domain.RoleAdmin})
+	res, err := f.admin.CreateUser(t.Context(), CreateUserRequest{Username: "root", Password: "pw", Role: domain.RoleAdmin})
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	if res.Username != "admin" || res.Role != domain.RoleAdmin {
-		t.Errorf("user = %+v, want admin/admin", res)
+	if res.Username != "root" || res.Role != domain.RoleAdmin {
+		t.Errorf("user = %+v, want root/admin", res)
 	}
 	if _, err := f.admin.CreateUser(t.Context(), CreateUserRequest{Username: "nobody", Password: "pw", Role: "root"}); !errors.Is(err, domain.ErrValidation) {
 		t.Errorf("bad role: err = %v, want validation", err)
