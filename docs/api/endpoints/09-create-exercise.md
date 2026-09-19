@@ -41,7 +41,7 @@ Add a new exercise to the shared master catalog. Any regular user can do this. T
 | 400 | `bad_request` | malformed JSON, unknown field |
 | 401 | `unauthorized` | |
 | 403 | `forbidden` | caller is admin |
-| 409 | `conflict` | `already_exists`: name taken by another exercise (returns `error.details.existing_id` so the app can re-map its local copy); `id_taken`: `id` exists with different content; `deleted`: `id` exists but was soft-deleted |
+| 409 | `conflict` | `already_exists`: name taken by another exercise (returns `error.details[0].existing_id` so the app can re-map its local copy); `id_taken`: `id` exists with different content; `deleted`: `id` exists but was soft-deleted |
 | 422 | `validation_failed` | invalid enum value (`invalid_value`), lengths, secondary rules |
 
 ## Data to persist

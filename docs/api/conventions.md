@@ -30,7 +30,7 @@ All non-2xx responses:
 }
 ```
 
-`details` optional. `code` is stable machine string; `message` may change.
+`details` optional, always an array of `{field?, issue, ...}` objects. A conflict may add extra keys to its first element: `current` (server copy, `stale`) or `existing_id` (`already_exists`). `code` is stable machine string; `message` may change.
 
 | HTTP | code | When |
 |------|------|------|

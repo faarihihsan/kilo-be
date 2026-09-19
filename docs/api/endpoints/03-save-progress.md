@@ -88,7 +88,7 @@ Let `stored` = the existing row's `updated_at` (client-supplied value from its l
 |------|--------|
 | No row with this `id` | create → **201** |
 | Row is soft-deleted | **409** `conflict`, `details: [{issue: "deleted"}]`. Deleted wins; the app should drop its local copy |
-| request `updated_at` < stored | **409** `conflict`, `details: [{issue: "stale"}]`, body has the server's current copy in `error.details.current`. The app decides: keep server copy, or re-save with a newer `updated_at` if the user's edit should win |
+| request `updated_at` < stored | **409** `conflict`, `details: [{issue: "stale", current: {…}}]`, where `current` is the server's current copy (`error.details[0].current`). The app decides: keep server copy, or re-save with a newer `updated_at` if the user's edit should win |
 | request `updated_at` == stored | **200**, no change, returns stored copy. This makes a retry after a lost response safe |
 | request `updated_at` > stored | replace → **200** |
 
