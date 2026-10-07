@@ -67,7 +67,7 @@ rm -f "$DUMP_DIR"/workout-*.dump.partial
 # is the consistent copy. -U postgres uses the peer-auth superuser (the image
 # always has it) so no password is needed on the command line.
 log "dumping workout database to $dump"
-"${COMPOSE[@]}" exec -T postgres pg_dump -U postgres -Fc workout > "$partial"
+"${COMPOSE[@]}" exec -T postgres pg_dump -U workout -Fc workout > "$partial"
 "${COMPOSE[@]}" exec -T postgres pg_restore -l < "$partial" >/dev/null
 mv "$partial" "$dump"
 log "dump complete ($(du -h "$dump" | cut -f1))"

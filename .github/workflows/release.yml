@@ -102,7 +102,7 @@ jobs:
           if docker compose ps --status running --services | grep -qx postgres; then
             ts="$(date -u +%Y%m%dT%H%M%SZ)"
             mkdir -p backups
-            docker compose exec -T postgres pg_dump -U postgres -Fc workout \
+            docker compose exec -T postgres pg_dump -U workout -Fc workout \
               > "backups/pre-deploy-$ts.dump"
             echo "pre-deploy dump: backups/pre-deploy-$ts.dump"
             find backups -maxdepth 1 -type f -name 'pre-deploy-*.dump' -mtime +14 -delete
