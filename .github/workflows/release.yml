@@ -75,11 +75,25 @@ jobs:
     steps:
       - name: Set up SSH
         run: |
+          set -euo pipefail
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          printf '%s\n' "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
-          chmod 644 ~/.ssh/known_hosts
+          # Trust the servers by scanning their real host keys (the home host is
+          # only reachable through the jump host). This avoids depending on a
+          # hand-maintained known_hosts secret.
+          ssh-keyscan -t ed25519 116.212.74.54 > ~/.ssh/known_hosts 2>/dev/null
+          ssh -o BatchMode=yes -i ~/.ssh/deploy_key ihsan@116.212.74.54 \
+              'ssh-keyscan -t ed25519 10.8.0.2' >> ~/.ssh/known_hosts 2>/dev/null
+          sort -u -o ~/.ssh/known_hosts ~/.ssh/known_hosts
+          echo "known_hosts entries: $(grep -c . ~/.ssh/known_hosts)"
+
+      - name: SSH preflight
+        run: |
+          ssh -o BatchMode=yes \
+              -o ProxyJump=ihsan@116.212.74.54 \
+              -i ~/.ssh/deploy_key \
+              ihsan@10.8.0.2 'echo "ssh preflight OK: $(hostname)"'
 
       - name: Sync compose file to the server
         run: |
