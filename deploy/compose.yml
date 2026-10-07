@@ -60,6 +60,10 @@ services:
     container_name: workout_app
     restart: unless-stopped
     network_mode: host
+    # Run as the host user that owns ./media (ihsan, uid 1000) so image writes
+    # succeed while nginx can still read them. The distroless image's default
+    # nonroot user (65532) owns nothing on the host.
+    user: "1000:1000"
     env_file: .env
     depends_on:
       postgres:

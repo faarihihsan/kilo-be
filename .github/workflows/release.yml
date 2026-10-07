@@ -81,6 +81,14 @@ jobs:
           printf '%s\n' "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
           chmod 644 ~/.ssh/known_hosts
 
+      - name: Sync compose file to the server
+        run: |
+          scp -o BatchMode=yes \
+              -o ProxyJump=ihsan@116.212.74.54 \
+              -i ~/.ssh/deploy_key \
+              deploy/compose.yml \
+              ihsan@10.8.0.2:~/apps/workout-tracker/compose.yml
+
       - name: Deploy over the VPS jump host
         run: |
           ssh -o BatchMode=yes \
