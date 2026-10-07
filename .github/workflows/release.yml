@@ -108,41 +108,15 @@ jobs:
         run: |
           ssh -o BatchMode=yes home 'echo "ssh preflight OK: $(hostname)"'
 
-      - name: Sync compose file to the server
+      - name: Sync deploy files to the server
         run: |
           # Pipe over the ssh exec channel; scp/SFTP mode is not available on
           # the home sshd, but plain ssh (used below) works.
           ssh -o BatchMode=yes home 'cat > ~/apps/workout-tracker/compose.yml' < deploy/compose.yml
+          ssh -o BatchMode=yes home 'cat > ~/apps/workout-tracker/deploy.sh' < deploy/deploy.sh
 
       - name: Deploy over the VPS jump host
         run: |
-          ssh -o BatchMode=yes home "TAG='${{ github.sha }}' bash -s" <<'REMOTE'
-          set -euo pipefail
-          cd ~/apps/workout-tracker
-
-          # Safety: dump the database before an image (which may migrate) lands.
-          if docker compose ps --status running --services | grep -qx postgres; then
-            ts="$(date -u +%Y%m%dT%H%M%SZ)"
-            mkdir -p backups
-            docker compose exec -T postgres pg_dump -U workout -Fc workout \
-              > "backups/pre-deploy-$ts.dump"
-            echo "pre-deploy dump: backups/pre-deploy-$ts.dump"
-            find backups -maxdepth 1 -type f -name 'pre-deploy-*.dump' -mtime +14 -delete
-          fi
-
-          docker compose pull
-          docker compose run --rm migrate
-          docker compose up -d app
-
-          # Fail the job if the new container never becomes healthy.
-          for i in $(seq 1 20); do
-            if curl -fsS http://127.0.0.1:8080/healthz >/dev/null; then
-              echo "healthz OK after ${i} attempt(s)"
-              exit 0
-            fi
-            sleep 3
-          done
-          echo "healthz did not come up" >&2
-          docker compose logs --tail 100 app >&2 || true
-          exit 1
-          REMOTE
+          # deploy.sh is a real file on the server, so docker commands that read
+          # stdin cannot swallow the script (the reason this used to fail).
+          ssh -o BatchMode=yes home "cd ~/apps/workout-tracker && TAG='${{ github.sha }}' bash deploy.sh"
