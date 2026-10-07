@@ -1,0 +1,18 @@
+# Pinned SSH host keys for the CI deploy (.github/workflows/release.yml).
+# These are PUBLIC keys, not secrets. They let the runner verify it is talking
+# to the real servers instead of trusting whatever answers (no scan at deploy
+# time). Regenerate if a server's host keys ever change (e.g. OS reinstall):
+#   ssh-keyscan 116.212.74.54            # VPS (jump host)
+#   ssh-keyscan 10.8.0.2                 # home server, run ON the home server
+# Keep the names exactly 116.212.74.54 and 10.8.0.2: they are what the ssh
+# config in release.yml connects to.
+
+# VPS (jump host)
+116.212.74.54 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPIVw3/anTqvS59mwaHKnDtLd4479jyAy++2RDdEBLmT
+116.212.74.54 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDrdbj9L7tWcZgErw+uns9rZIkDEWl+/DjMRaIlHpaqEeH/zl+tfG12su5T19rkXs0/93rzzS+ZCYoA06bA8+TvwYs/qWOfdWRhxJW1lrOjkIEtHV+cnSAjHpsSIQwpN89QcnxJF4Tfv9u73pSdgS+9iX5gKPg614iV3gRNE0spoaqMQDVJHrP+M6D6GW70ZDLIhMW7JbSJntwuip91TFdjK+Y/OaQ74df8n7Hktn3fx3jLv3AzIbFu5fd/BKmMiiBvSdbc5FTP2JMcCfd3BD/UXgMPYdvl5/46AbQGArUbAdje2r1HFnFvjxQEdJDU5PVjxxEqloyjBS1RYKaUfOvrwK7VBkR9i0TFTG6BffKdLlkNtCkxQjhejo3rOBT7X9zTfBUpsVFJX50ySOSJXqo4vuejaoz65pAcMI66zn4HgkU6IFcCfVwyPuKwYplqvqQjvTQDmXVIpNtQAd3xB7hqwAsVLIFMNQozSpGSczKQU+CKe6Ry3C2TAtF0LUDjuVM=
+116.212.74.54 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBPrIxGpL7g2nChTtNles34Gj69hUmb7Wmc7qDVh9ivXRUifqCQ/02jQkX7OUJah4n4Cc9KSWTB1pqvSOI/Fa2GE=
+
+# Home server (reached through the VPS over WireGuard)
+10.8.0.2 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGkoxNNZMXeUNwm8/EfE7crIFxOF6rvnWirh4voasv/I
+10.8.0.2 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDOXDYc4a2MxJuLLRFlvqcYwGv0KKltssucuUXR+jxshXInLE/f8Z8E4KFh5nhZGRmbGMaKWK1IlNY627AfeGhZ/AW3JlsZkiMPdAJtAAlIOm/K+5ytBRj4ZHt21JgDqAxTLtzkmLFFNuJ/GNOWmIsb095Jjed3YZxXMB464IcLmZ19rLiB5FubBYymZ/hvjFlV5v+YD541pvbwfy82GmjXHkYjpZFjikuGPO1SuIVTBm0SyHPj6pmv21ddJqYfGiSXG+Gqn1cniwohjHrPFbdrqgBJVzX4K1BzsruLL3QcANRJNOwJptRMgmGM8zH3l5Us+jKLlVhO7CahpghChLNWg6uuExNDEwqToqAeePUBkK4RoqE7NLWN1WK6OKFrBme0XRP2eZrDnsI2oXs3UNGyLaT0q2KzXv8F23Y/rkzprJzZ7yIlTCSacPoId4+rmxFg4m0jXqRKmRkdcKsC0eJ8Vah3CQhQf/X5XhZgLxmmqe/d+WVnNKeXa3b5WhYSvH0=
+10.8.0.2 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBHnAuBA4VW8XSdc3dccR7oL9+9kWeoZcPd+66zLwN+oG1IE/1Lr8XrK9PmaAkJQvgLjEOXHH6EPTOTXqH+qsBjs=

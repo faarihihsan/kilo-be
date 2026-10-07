@@ -4,10 +4,10 @@ name: Release
 # to the home server behind a manual approval (the `production` environment).
 #
 # The deploy job connects to the home server through the VPS jump host because
-# the home ISP uses CGNAT (no inbound). Secrets come from the `production`
-# environment, so they are only released to the job after it is approved:
+# the home ISP uses CGNAT (no inbound). The secret comes from the `production`
+# environment, so it is only released to the job after it is approved:
 #   DEPLOY_SSH_KEY      private key authorized on both the VPS and the home server
-#   DEPLOY_KNOWN_HOSTS  host keys of 116.212.74.54 (jump) and 10.8.0.2 (target)
+# The servers' (public) host keys are pinned in deploy/known_hosts.
 
 on:
   push:
@@ -73,12 +73,23 @@ jobs:
       name: production
       url: https://kilo.faarihsan.com
     steps:
+      # Each job gets a fresh runner: without this, deploy/compose.yml,
+      # deploy/deploy.sh and deploy/known_hosts do not exist here.
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: deploy
+
       - name: Set up SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
         run: |
           set -euo pipefail
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
+          # Pinned (public) host keys for the VPS and the home server. Nothing
+          # is scanned at deploy time, so a missing or changed key fails loudly.
+          install -m 600 deploy/known_hosts ~/.ssh/known_hosts
           # An ssh config makes the JUMP host use the deploy key too: -i applies
           # only to the target, so without this the ProxyJump connection tries
           # the runner's (nonexistent) default keys and fails with exit 255.
@@ -88,6 +99,7 @@ jobs:
               User ihsan
               IdentityFile ~/.ssh/deploy_key
               IdentitiesOnly yes
+              StrictHostKeyChecking yes
 
           Host home
               HostName 10.8.0.2
@@ -95,18 +107,19 @@ jobs:
               ProxyJump vps
               IdentityFile ~/.ssh/deploy_key
               IdentitiesOnly yes
+              StrictHostKeyChecking yes
           EOF
           chmod 600 ~/.ssh/config
-          # Trust the servers by scanning their real host keys (home is only
-          # reachable through the jump host).
-          ssh-keyscan -t ed25519 116.212.74.54 > ~/.ssh/known_hosts 2>/dev/null
-          ssh vps 'ssh-keyscan -t ed25519 10.8.0.2' >> ~/.ssh/known_hosts 2>/dev/null
-          sort -u -o ~/.ssh/known_hosts ~/.ssh/known_hosts
-          echo "known_hosts entries: $(grep -c . ~/.ssh/known_hosts)"
 
       - name: SSH preflight
         run: |
-          ssh -o BatchMode=yes home 'echo "ssh preflight OK: $(hostname)"'
+          if ! ssh -o BatchMode=yes home 'echo "ssh preflight OK: $(hostname)"'; then
+            # Show why (host key, auth, jump host) instead of just exit 255.
+            echo "::group::ssh -v output"
+            ssh -v -o BatchMode=yes home true 2>&1 | tail -n 60 || true
+            echo "::endgroup::"
+            exit 1
+          fi
 
       - name: Sync deploy files to the server
         run: |

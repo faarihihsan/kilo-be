@@ -149,9 +149,12 @@ dump is the consistent copy.
    `pg_dump` safety copy, pulls the new tag, migrates, restarts the app, and
    polls `/healthz`.
 
-Required GitHub secrets (in the `production` environment):
-`DEPLOY_SSH_KEY` (private key authorized on the VPS *and* home server),
-`DEPLOY_KNOWN_HOSTS` (host keys of `116.212.74.54` and `10.8.0.2`).
+Required GitHub secret (in the `production` environment):
+`DEPLOY_SSH_KEY` (private key authorized on the VPS *and* home server).
+
+The servers' public host keys are pinned in `deploy/known_hosts` (names must be
+`116.212.74.54` and `10.8.0.2`). If a server's host keys change, regenerate it:
+`ssh-keyscan 116.212.74.54`, and `ssh-keyscan 10.8.0.2` run on the home server.
 
 Rollback: approve a deploy of a previous `{sha}` by re-running an older
 workflow run, or on the server `TAG=<old-sha> docker compose up -d app`.
