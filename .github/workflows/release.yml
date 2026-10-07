@@ -113,13 +113,7 @@ jobs:
 
       - name: SSH preflight
         run: |
-          if ! ssh -o BatchMode=yes home 'echo "ssh preflight OK: $(hostname)"'; then
-            # Show why (host key, auth, jump host) instead of just exit 255.
-            echo "::group::ssh -v output"
-            ssh -v -o BatchMode=yes home true 2>&1 | tail -n 60 || true
-            echo "::endgroup::"
-            exit 1
-          fi
+          ssh -o BatchMode=yes home 'echo "ssh preflight OK: $(hostname)"'
 
       - name: Sync deploy files to the server
         run: |
