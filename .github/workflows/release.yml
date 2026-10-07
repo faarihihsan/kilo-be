@@ -79,38 +79,44 @@ jobs:
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          # Trust the servers by scanning their real host keys (the home host is
-          # only reachable through the jump host). This avoids depending on a
-          # hand-maintained known_hosts secret.
+          # An ssh config makes the JUMP host use the deploy key too: -i applies
+          # only to the target, so without this the ProxyJump connection tries
+          # the runner's (nonexistent) default keys and fails with exit 255.
+          cat > ~/.ssh/config <<'EOF'
+          Host vps
+              HostName 116.212.74.54
+              User ihsan
+              IdentityFile ~/.ssh/deploy_key
+              IdentitiesOnly yes
+
+          Host home
+              HostName 10.8.0.2
+              User ihsan
+              ProxyJump vps
+              IdentityFile ~/.ssh/deploy_key
+              IdentitiesOnly yes
+          EOF
+          chmod 600 ~/.ssh/config
+          # Trust the servers by scanning their real host keys (home is only
+          # reachable through the jump host).
           ssh-keyscan -t ed25519 116.212.74.54 > ~/.ssh/known_hosts 2>/dev/null
-          ssh -o BatchMode=yes -i ~/.ssh/deploy_key ihsan@116.212.74.54 \
-              'ssh-keyscan -t ed25519 10.8.0.2' >> ~/.ssh/known_hosts 2>/dev/null
+          ssh vps 'ssh-keyscan -t ed25519 10.8.0.2' >> ~/.ssh/known_hosts 2>/dev/null
           sort -u -o ~/.ssh/known_hosts ~/.ssh/known_hosts
           echo "known_hosts entries: $(grep -c . ~/.ssh/known_hosts)"
 
       - name: SSH preflight
         run: |
-          ssh -o BatchMode=yes \
-              -o ProxyJump=ihsan@116.212.74.54 \
-              -i ~/.ssh/deploy_key \
-              ihsan@10.8.0.2 'echo "ssh preflight OK: $(hostname)"'
+          ssh -o BatchMode=yes home 'echo "ssh preflight OK: $(hostname)"'
 
       - name: Sync compose file to the server
         run: |
           # Pipe over the ssh exec channel; scp/SFTP mode is not available on
           # the home sshd, but plain ssh (used below) works.
-          ssh -o BatchMode=yes \
-              -o ProxyJump=ihsan@116.212.74.54 \
-              -i ~/.ssh/deploy_key \
-              ihsan@10.8.0.2 'cat > ~/apps/workout-tracker/compose.yml' \
-              < deploy/compose.yml
+          ssh -o BatchMode=yes home 'cat > ~/apps/workout-tracker/compose.yml' < deploy/compose.yml
 
       - name: Deploy over the VPS jump host
         run: |
-          ssh -o BatchMode=yes \
-              -o ProxyJump=ihsan@116.212.74.54 \
-              -i ~/.ssh/deploy_key \
-              ihsan@10.8.0.2 "TAG='${{ github.sha }}' bash -s" <<'REMOTE'
+          ssh -o BatchMode=yes home "TAG='${{ github.sha }}' bash -s" <<'REMOTE'
           set -euo pipefail
           cd ~/apps/workout-tracker
 
