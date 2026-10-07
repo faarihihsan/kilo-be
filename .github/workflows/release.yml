@@ -83,11 +83,13 @@ jobs:
 
       - name: Sync compose file to the server
         run: |
-          scp -o BatchMode=yes \
+          # Pipe over the ssh exec channel; scp/SFTP mode is not available on
+          # the home sshd, but plain ssh (used below) works.
+          ssh -o BatchMode=yes \
               -o ProxyJump=ihsan@116.212.74.54 \
               -i ~/.ssh/deploy_key \
-              deploy/compose.yml \
-              ihsan@10.8.0.2:~/apps/workout-tracker/compose.yml
+              ihsan@10.8.0.2 'cat > ~/apps/workout-tracker/compose.yml' \
+              < deploy/compose.yml
 
       - name: Deploy over the VPS jump host
         run: |
