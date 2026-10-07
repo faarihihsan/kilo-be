@@ -402,7 +402,7 @@ func TestPlansSaveConflictRule(t *testing.T) {
 	t.Run("older by one microsecond is stale", func(t *testing.T) {
 		e, id, _ := setup(t)
 		_, _, err := e.plans.Save(t.Context(), e.user, id, planSpec("x", planAt(100).Add(-time.Microsecond)))
-		planRequireConflict(t, err, domain.IssueStale)
+		_ = planRequireConflict(t, err, domain.IssueStale)
 	})
 
 	t.Run("soft-deleted is a deleted conflict, even with a newer updated_at", func(t *testing.T) {
@@ -531,12 +531,12 @@ func TestPlansSaveUnknownExercise(t *testing.T) {
 		id := planNewID(t)
 		e.save(t, id, planSpec("Stored", planAt(50)))
 		_, _, err := e.plans.Save(t.Context(), e.user, id, planSpec("Old", planAt(10), row(ghost1, 0)))
-		planRequireConflict(t, err, domain.IssueStale)
+		_ = planRequireConflict(t, err, domain.IssueStale)
 		if err := e.plans.SoftDelete(t.Context(), e.user, id); err != nil {
 			t.Fatal(err)
 		}
 		_, _, err = e.plans.Save(t.Context(), e.user, id, planSpec("New", planAt(99), row(ghost1, 0)))
-		planRequireConflict(t, err, domain.IssueDeleted)
+		_ = planRequireConflict(t, err, domain.IssueDeleted)
 	})
 
 	t.Run("a no-op retry does not look at the exercises", func(t *testing.T) {
@@ -768,7 +768,7 @@ func TestPlansSoftDelete(t *testing.T) {
 	})
 	t.Run("a later save is a deleted conflict", func(t *testing.T) {
 		_, _, err := e.plans.Save(t.Context(), e.user, id, planSpec("Undo", planAt(1000)))
-		planRequireConflict(t, err, domain.IssueDeleted)
+		_ = planRequireConflict(t, err, domain.IssueDeleted)
 	})
 	t.Run("never existed", func(t *testing.T) {
 		planRequireNotFound(t, e.plans.SoftDelete(t.Context(), e.user, uuid.New()))

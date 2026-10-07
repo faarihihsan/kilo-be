@@ -216,7 +216,7 @@ func TestAuthLoginBlocksAfterIPFailures(t *testing.T) {
 		}
 	}
 	_, err := f.auth.Login(t.Context(), "203.0.113.9", LoginRequest{Username: "ihsan", Password: "secret"})
-	authTestRateLimited(t, err)
+	_ = authTestRateLimited(t, err)
 }
 
 func TestAuthLogoutRevokesCurrentToken(t *testing.T) {

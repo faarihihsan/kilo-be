@@ -109,7 +109,7 @@ func TestExercisesSetImage(t *testing.T) {
 			t.Fatal(err)
 		}
 		_, _, err := s.SetImage(t.Context(), e.ID, exerciseImage(exerciseHashA, domain.ImageExtPNG), exerciseT0.Add(time.Hour))
-		exerciseRequireConflict(t, err, domain.IssueDeleted)
+		_ = exerciseRequireConflict(t, err, domain.IssueDeleted)
 		got, _ := s.Get(t.Context(), e.ID)
 		if got.Image != nil {
 			t.Error("a deleted exercise got an image")

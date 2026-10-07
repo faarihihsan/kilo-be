@@ -257,7 +257,8 @@ func TestRateLimitConfigOverridesAndNilTrusted(t *testing.T) {
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/x", nil))
 		return rec.Code
 	}
-	if do() != 204 || do() != 204 {
+	first, second := do(), do()
+	if first != 204 || second != 204 {
 		t.Fatal("burst of 2 not admitted")
 	}
 	if got := do(); got != http.StatusTooManyRequests {

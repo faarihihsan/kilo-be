@@ -27,7 +27,8 @@ func TestIPKey(t *testing.T) {
 	if got := IPKey(long); len(got) > 80 || got == long {
 		t.Errorf("IPKey of a 10000 byte string has %d bytes, want a short digest", len(got))
 	}
-	if IPKey(long) != IPKey(long) || IPKey(long) == IPKey(long+"y") {
+	key := IPKey(long)
+	if key != IPKey(long) || key == IPKey(long+"y") {
 		t.Error("digest is not deterministic or collides")
 	}
 }

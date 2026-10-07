@@ -198,7 +198,7 @@ func TestExercisesCreateConflicts(t *testing.T) {
 			t.Fatal(err)
 		}
 		_, _, err := s.Create(t.Context(), id, user, exerciseInput("Squat"), exerciseT0.Add(time.Hour))
-		exerciseRequireConflict(t, err, domain.IssueDeleted)
+		_ = exerciseRequireConflict(t, err, domain.IssueDeleted)
 	})
 
 	t.Run("name taken is already_exists with the other id, ignoring case", func(t *testing.T) {
@@ -217,7 +217,7 @@ func TestExercisesCreateConflicts(t *testing.T) {
 		exerciseCreate(t, s, user, "Beta")
 		// Same id as Alpha, different content, and a name that Beta holds.
 		_, _, err := s.Create(t.Context(), a.ID, user, exerciseInput("Beta"), exerciseT0)
-		exerciseRequireConflict(t, err, domain.IssueIDTaken)
+		_ = exerciseRequireConflict(t, err, domain.IssueIDTaken)
 	})
 
 	t.Run("a deleted name can be reused", func(t *testing.T) {
@@ -433,7 +433,7 @@ func TestExercisesUpdate(t *testing.T) {
 			t.Fatal(err)
 		}
 		_, err := s.Update(t.Context(), gone.ID, exerciseInput("Taken"), exerciseT0.Add(time.Hour))
-		exerciseRequireConflict(t, err, domain.IssueDeleted)
+		_ = exerciseRequireConflict(t, err, domain.IssueDeleted)
 	})
 
 	t.Run("a name held by another live exercise is already_exists", func(t *testing.T) {
@@ -500,7 +500,7 @@ func TestExercisesUpdate(t *testing.T) {
 			t.Fatalf("%d renames succeeded, want 1 (errors: %v)", won, errs)
 		}
 		for _, err := range errs {
-			exerciseRequireConflict(t, err, domain.IssueAlreadyExists)
+			_ = exerciseRequireConflict(t, err, domain.IssueAlreadyExists)
 		}
 	})
 }

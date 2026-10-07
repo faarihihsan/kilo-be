@@ -233,13 +233,13 @@ func TestExercisesServiceCreate(t *testing.T) {
 		changed := exerciseTestContent("Bench Press")
 		changed.Equipment = domain.EquipmentDumbbell
 		_, _, err = s.Create(t.Context(), user, domain.ExerciseCreateInput{ID: &id, ExerciseInput: changed})
-		exerciseTestConflict(t, err, domain.IssueIDTaken)
+		_ = exerciseTestConflict(t, err, domain.IssueIDTaken)
 
 		if err := s.Delete(t.Context(), first.ID); err != nil {
 			t.Fatal(err)
 		}
 		_, _, err = s.Create(t.Context(), user, domain.ExerciseCreateInput{ID: &id, ExerciseInput: exerciseTestContent("Bench Press")})
-		exerciseTestConflict(t, err, domain.IssueDeleted)
+		_ = exerciseTestConflict(t, err, domain.IssueDeleted)
 	})
 }
 
@@ -283,7 +283,7 @@ func TestExercisesServiceUpdate(t *testing.T) {
 		e, _, _ := s.Create(t.Context(), user, domain.ExerciseCreateInput{ExerciseInput: exerciseTestContent("Bench Press")})
 		_ = s.Delete(t.Context(), e.ID)
 		_, err := s.Update(t.Context(), e.ID, exerciseTestContent("Bench Press"))
-		exerciseTestConflict(t, err, domain.IssueDeleted)
+		_ = exerciseTestConflict(t, err, domain.IssueDeleted)
 	})
 }
 
