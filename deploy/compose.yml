@@ -64,6 +64,11 @@ services:
     # succeed while nginx can still read them. The distroless image's default
     # nonroot user (65532) owns nothing on the host.
     user: "1000:1000"
+    # The distroless image's default WORKDIR (/home/nonroot) is mode 0700 owned
+    # by uid 65532, which uid 1000 cannot enter; without this the process cannot
+    # resolve any relative path. "/" is world-searchable and has no .env, so the
+    # startup .env lookup is a harmless no-op.
+    working_dir: /
     env_file: .env
     depends_on:
       postgres:
