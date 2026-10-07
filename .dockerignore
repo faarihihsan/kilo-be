@@ -1,0 +1,17 @@
+.git
+.github
+.idea
+.claude
+.worktrees
+.direnv
+bin
+var
+*.test
+*.out
+.env
+.env.*
+!.env.example
+.DS_Store
+docs
+deploy
+*.md

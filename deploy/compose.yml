@@ -1,0 +1,71 @@
+# Production stack for workout-tracker on the home server.
+#
+# Everything uses host networking and listens on 127.0.0.1 only: the host nginx
+# is the only way in (host-network listeners obey ufw; published bridge ports
+# would bypass it). This also means the app sees the proxy at 127.0.0.1, so
+# TRUSTED_PROXY_CIDRS=127.0.0.1/32 is correct.
+#
+# The host nginx serves /media/* straight from ./media and proxies everything
+# else to 127.0.0.1:8080.
+#
+# Bring-up / deploy (from this directory, on the server):
+#   TAG=<git-sha> docker compose pull
+#   TAG=<git-sha> docker compose run --rm migrate
+#   TAG=<git-sha> docker compose up -d app
+#
+# The `migrate` service is one-shot and is never started by `up`; migrations run
+# explicitly through `docker compose run --rm migrate` (image-backed, so a deploy
+# always migrates the new image before the app restarts).
+name: workout-tracker
+
+services:
+  postgres:
+    image: postgres:18
+    container_name: workout_postgres
+    restart: unless-stopped
+    network_mode: host
+    # The "workout" role and database are created on first start.
+    environment:
+      POSTGRES_USER: workout
+      POSTGRES_DB: workout
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    # Loopback only, even though host networking is already firewalled.
+    command:
+      - postgres
+      - -c
+      - listen_addresses=127.0.0.1
+    volumes:
+      # Parent dir, not .../data: postgres:18 keeps PGDATA under
+      # /var/lib/postgresql/<major>/docker. On the internal SSD, like Immich.
+      - ./postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U workout -d workout"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  migrate:
+    image: ghcr.io/faarihihsan/kilo-be:${TAG:-latest}
+    network_mode: host
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["migrate", "up"]
+    restart: "no"
+
+  app:
+    image: ghcr.io/faarihihsan/kilo-be:${TAG:-latest}
+    container_name: workout_app
+    restart: unless-stopped
+    network_mode: host
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["serve"]
+    volumes:
+      # Exercise images. Must equal MEDIA_DIR in .env and the nginx alias in
+      # deploy/nginx-kilo-home.conf (host path ~/apps/workout-tracker/media).
+      - ./media:/var/lib/workout-tracker/media

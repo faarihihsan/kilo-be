@@ -61,3 +61,97 @@ Do this once before relying on the backups, and again after changing the backup 
 6. `dropdb workout_restore`, and note how long it took.
 
 Real disaster: new VPS, run this checklist, restore the dump into the empty `workout` database with `pg_restore --no-owner --role workout` (so the app user owns the tables) instead of `workout_restore`, copy the media back into `MEDIA_DIR` (`chown -R workout:workout`), start the service, run `server media gc --dry-run`.
+
+---
+
+# Homeserver deployment (Docker + CI/CD)
+
+The production target is the home server (`ihsan-home-server`, LAN `192.168.1.2`,
+reachable remotely as `homeserver-remote` through the VPS jump host). Public
+traffic reaches it as `https://kilo.faarihsan.com`:
+
+```
+client --> VPS nginx :443 (Let's Encrypt) --WireGuard--> home nginx :80 --+
+              /media/*  -> ~/apps/workout-tracker/media (disk)            |
+              /*        -> 127.0.0.1:8080 workout_app (Docker) <-------+ 
+                                     |
+                            workout_postgres 127.0.0.1:5432 (Docker)
+```
+
+Everything runs in `~/apps/workout-tracker` on the internal SSD. One folder per
+app, matching Immich/Grafana. Host networking + loopback only; nginx is the sole
+entry point.
+
+## Files (in `deploy/`)
+
+| File | Goes to |
+|------|---------|
+| `compose.yml` | `~/apps/workout-tracker/compose.yml` |
+| `env.docker.example` | copy to `~/apps/workout-tracker/.env` (chmod 600) |
+| `nginx-kilo-home.conf` | home `/etc/nginx/sites-available/kilo` |
+| `nginx-kilo-vps.conf` | VPS `/etc/nginx/sites-available/kilo` |
+| `backup-db.sh` | `~/apps/workout-tracker/backup-db.sh` (chmod 755) |
+
+## One-time setup
+
+1. Directories and config (on the server):
+   ```bash
+   mkdir -p ~/apps/workout-tracker/{media,postgres,backups}
+   cp compose.yml ~/apps/workout-tracker/
+   cp env.docker.example ~/apps/workout-tracker/.env   # then edit it
+   chmod 600 ~/apps/workout-tracker/.env
+   ```
+   Set a strong `POSTGRES_PASSWORD` and the matching, percent-encoded password
+   in `DATABASE_URL`.
+2. First bring-up (use a real image tag from GHCR):
+   ```bash
+   cd ~/apps/workout-tracker
+   TAG=<git-sha> docker compose pull
+   TAG=<git-sha> docker compose up -d postgres
+   TAG=<git-sha> docker compose run --rm migrate
+   TAG=<git-sha> docker compose up -d app
+   docker compose run --rm app admin reset-password --username admin  # retire admin/admin
+   ```
+3. nginx + TLS:
+   ```bash
+   # home
+   sudo cp /path/to/nginx-kilo-home.conf /etc/nginx/sites-available/kilo
+   sudo ln -s /etc/nginx/sites-available/kilo /etc/nginx/sites-enabled/kilo
+   sudo nginx -t && sudo systemctl reload nginx
+   # VPS
+   sudo cp /path/to/nginx-kilo-vps.conf /etc/nginx/sites-available/kilo
+   sudo ln -s /etc/nginx/sites-available/kilo /etc/nginx/sites-enabled/kilo
+   sudo nginx -t && sudo systemctl reload nginx
+   sudo certbot --nginx -d kilo.faarihsan.com
+   ```
+   Verify: `curl -fsS https://kilo.faarihsan.com/healthz`.
+
+## Backups
+
+`backup-db.sh` runs on the host as `ihsan` and dumps the database into
+`/mnt/data/db-dumps/`, which the existing nightly restic job already backs up.
+Add a cron entry:
+```
+20 3 * * *  /home/ihsan/apps/workout-tracker/backup-db.sh >> /home/ihsan/apps/workout-tracker/backup.log 2>&1
+```
+It also writes `~/apps/grafana/textfile/workout-backup.prom` for Grafana alerts.
+The live `~/apps/*/postgres` files are intentionally excluded from restic; the
+dump is the consistent copy.
+
+## CI/CD
+
+`.github/workflows/release.yml`, on every push to `main`:
+
+1. `ci` — calls `ci.yml` (gofmt, vet, golangci-lint, `go test -race`).
+2. `build` — builds and pushes `ghcr.io/faarihihsan/kilo-be:{sha,latest}` to GHCR.
+3. `deploy` — gated by the **`production`** GitHub environment (required
+   reviewer). After approval it SSHes through the VPS jump host, takes a
+   `pg_dump` safety copy, pulls the new tag, migrates, restarts the app, and
+   polls `/healthz`.
+
+Required GitHub secrets (in the `production` environment):
+`DEPLOY_SSH_KEY` (private key authorized on the VPS *and* home server),
+`DEPLOY_KNOWN_HOSTS` (host keys of `116.212.74.54` and `10.8.0.2`).
+
+Rollback: approve a deploy of a previous `{sha}` by re-running an older
+workflow run, or on the server `TAG=<old-sha> docker compose up -d app`.
