@@ -106,6 +106,8 @@ func (h *Progress) Delete(w http.ResponseWriter, r *http.Request) {
 // progressListParams reads the query of endpoint 5 (spec 05): a bad cursor,
 // timestamp or workout_plan_id is a 400 (the cursor is decoded by the service),
 // a limit out of range, a bad include_deleted or a bad expand a 422.
+// updated_since, from and to also take a bare date: midnight UTC of it, and for
+// to the last microsecond of it, so the whole day is included.
 func progressListParams(r *http.Request) (params domain.ProgressListParams, expand bool, err error) {
 	page, err := render.ParsePage(r)
 	if err != nil {
@@ -119,7 +121,7 @@ func progressListParams(r *http.Request) (params domain.ProgressListParams, expa
 	if params.From, err = render.ParseTimeParam(r, "from"); err != nil {
 		return params, false, err
 	}
-	if params.To, err = render.ParseTimeParam(r, "to"); err != nil {
+	if params.To, err = render.ParseUpperTimeParam(r, "to"); err != nil {
 		return params, false, err
 	}
 	if params.IncludeDeleted, err = render.ParseBool(r, "include_deleted", false); err != nil {

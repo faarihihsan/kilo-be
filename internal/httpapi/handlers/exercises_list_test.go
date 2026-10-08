@@ -225,6 +225,19 @@ func TestExercisesAPIListSyncFeed(t *testing.T) {
 		}
 	})
 
+	t.Run("a bare date is midnight UTC of that day", func(t *testing.T) {
+		a := exerciseNewAPI(t)
+		a.seed("One", at(1)) // 2026-08-01T10:00:01Z
+		got := a.asUser().get(exerciseQuery("updated_since", "2026-08-01")).status(http.StatusOK).names()
+		if !slices.Equal(got, []string{"One"}) {
+			t.Errorf("since the day itself: names = %v, want [One]", got)
+		}
+		got = a.asUser().get(exerciseQuery("updated_since", "2026-08-02")).status(http.StatusOK).names()
+		if len(got) != 0 {
+			t.Errorf("since the next day: names = %v, want none", got)
+		}
+	})
+
 	t.Run("edits and deletes reach the feed", func(t *testing.T) {
 		a := exerciseNewAPI(t)
 		id := a.asUser().create("Squat")
@@ -396,7 +409,7 @@ func TestExercisesAPIListErrors(t *testing.T) {
 		{"a cursor with a bad id", exerciseQuery("cursor", domain.EncodeKeyCursor("ex1", "nope"))},
 		{"a name cursor in sync mode", exerciseQuery("updated_since", "1970-01-01T00:00:00Z", "cursor", domain.EncodeKeyCursor("ex1", uuid.NewString()))},
 		{"updated_since: not a timestamp", exerciseQuery("updated_since", "yesterday")},
-		{"updated_since: a date only", exerciseQuery("updated_since", "2026-08-01")},
+		{"updated_since: an impossible date", exerciseQuery("updated_since", "2026-02-30")},
 		{"updated_since: empty", exerciseQuery("updated_since", "")},
 		{"updated_since: a plus that became a space", "/v1/exercises?updated_since=2026-08-01T12:00:00+02:00"},
 	} {

@@ -130,7 +130,10 @@ func TestParseTimeParam(t *testing.T) {
 		{"offset is converted to UTC", "updated_since=2026-09-19T10:30:00%2B02:00", utc("2026-09-19T08:30:00Z"), false},
 		{"negative offset", "updated_since=2026-09-19T03:30:00-05:00", utc("2026-09-19T08:30:00Z"), false},
 		{"plus decoded to space", "updated_since=2026-09-19T10:30:00+02:00", nil, true},
-		{"date only", "updated_since=2026-09-19", nil, true},
+		{"date only is midnight UTC", "updated_since=2026-09-19", utc("2026-09-19T00:00:00Z"), false},
+		{"epoch date", "updated_since=1970-01-01", utc("1970-01-01T00:00:00Z"), false},
+		{"impossible date", "updated_since=2026-02-30", nil, true},
+		{"date with slashes", "updated_since=2026/09/19", nil, true},
 		{"no zone", "updated_since=2026-09-19T08:30:00", nil, true},
 		{"unix seconds", "updated_since=1789806600", nil, true},
 		{"garbage", "updated_since=yesterday", nil, true},
@@ -140,6 +143,51 @@ func TestParseTimeParam(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := render.ParseTimeParam(withQuery(tc.query), "updated_since")
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("got %v, want error", got)
+				}
+				status, body := render.MapError(err)
+				if status != 400 || body.Error.Code != "bad_request" {
+					t.Errorf("mapped to %d %s, want 400 bad_request", status, body.Error.Code)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (got == nil) != (tc.want == nil) || (got != nil && (!got.Equal(*tc.want) || got.Location() != time.UTC)) {
+				t.Errorf("got %v, want %v (UTC)", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseUpperTimeParam(t *testing.T) {
+	utc := func(s string) *time.Time {
+		v, err := time.Parse(time.RFC3339Nano, s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		v = v.UTC()
+		return &v
+	}
+	tests := []struct {
+		name    string
+		query   string
+		want    *time.Time
+		wantErr bool
+	}{
+		{"absent", "", nil, false},
+		{"date is the end of that UTC day", "to=2026-09-19", utc("2026-09-19T23:59:59.999999Z"), false},
+		{"timestamp is used as given", "to=2026-09-19T08:30:00Z", utc("2026-09-19T08:30:00Z"), false},
+		{"local midnight with offset", "to=2026-09-19T00:00:00%2B07:00", utc("2026-09-18T17:00:00Z"), false},
+		{"garbage", "to=tomorrow", nil, true},
+		{"empty", "to=", nil, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := render.ParseUpperTimeParam(withQuery(tc.query), "to")
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("got %v, want error", got)

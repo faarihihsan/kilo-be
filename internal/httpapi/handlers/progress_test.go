@@ -774,6 +774,15 @@ func TestProgressAPIList(t *testing.T) {
 			want  []string
 		}{
 			{"workout_plan_id=" + a.plan.String(), []string{s[3], s[1]}},
+			// A bare date is a day in UTC: from starts at its midnight, to
+			// runs to its last microsecond (sessions start at 08:00Z).
+			{"from=2026-01-12", []string{s[4], s[3], s[2]}},
+			{"to=2026-01-12", []string{s[2], s[1], s[0]}},
+			{"from=2026-01-12&to=2026-01-12", []string{s[2]}},
+			{"from=2026-01-11&to=2026-01-13", []string{s[3], s[2], s[1]}},
+			// A timestamp with an offset (a device's local midnight) is exact.
+			{"to=2026-01-12T00:00:00%2B07:00", []string{s[1], s[0]}},
+			{"from=2026-01-12T00:00:00%2B07:00&to=2026-01-12T23:59:59%2B07:00", []string{s[2]}},
 			{"from=2026-01-12T08:00:00Z", []string{s[4], s[3], s[2]}},
 			{"to=2026-01-12T08:00:00Z", []string{s[2], s[1], s[0]}},
 			{"from=2026-01-11T00:00:00Z&to=2026-01-13T23:59:59Z", []string{s[3], s[2], s[1]}},
@@ -875,7 +884,10 @@ func TestProgressAPIListErrors(t *testing.T) {
 		{"cursor=garbage&expand=exercises", 400, "bad_request", ""},
 		{"updated_since=yesterday", 400, "bad_request", ""},
 		{"updated_since=1758268502", 400, "bad_request", ""},
-		{"from=2026-01-01", 400, "bad_request", ""},
+		{"from=2026-01-01", 200, "", ""},
+		{"to=2026-01-01", 200, "", ""},
+		{"from=2026/01/01", 400, "bad_request", ""},
+		{"to=2026-02-30", 400, "bad_request", ""},
 		{"to=nope", 400, "bad_request", ""},
 		{"workout_plan_id=nope", 400, "bad_request", ""},
 		{"workout_plan_id=", 400, "bad_request", ""},

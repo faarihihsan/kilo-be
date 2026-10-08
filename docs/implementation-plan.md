@@ -16,7 +16,7 @@ Target: one Go binary + PostgreSQL + a reverse proxy on a single **2 core / 2 GB
 | Passwords | argon2id (`golang.org/x/crypto/argon2`) | agreed |
 | IDs | UUID v7 (library such as `github.com/google/uuid`) | time-ordered, index friendly |
 | Config | environment variables only, validated at startup | 12-factor, simple with systemd/Docker |
-| Logging | standard `log/slog`, JSON to stdout | journald/Docker collects it |
+| Logging | standard `log/slog` with a text handler: `<time> trace-id=<id> <LEVEL> <message>`, to stdout | journald/Docker collects it |
 | Tests | standard `testing` + a real Postgres (docker, or `testcontainers-go`) | integration tests matter more than mocks here |
 | Lint/CI | `go vet`, `staticcheck` or `golangci-lint`, `go test -race` | |
 
@@ -73,7 +73,7 @@ Order of middleware, outermost first:
 
 1. **Recover**: panic → 500 `internal`, logged with stack, no internals leaked.
 2. **Request ID**: generate/propagate `X-Request-Id`, add to logs.
-3. **Access log**: method, path, status, duration, user id (if known). Never log bodies, passwords or tokens.
+3. **Access log**: two lines per request, `Request = ...` and `Response = ...`, with method, full URI, status, duration and the request/response JSON payloads. Password and token fields (body and query) are redacted to `***`; the `Authorization` header is never logged.
 4. **Body limit**: 1 MiB, 2 MiB on the image route.
 5. **Rate limit** (per IP, generic) for auth/admin routes.
 6. **Auth** (except login): parse bearer → SHA-256 → look up token → check `expires_at`, `revoked_at` → attach user id + role; lazily update `last_used_at` (at most hourly).
@@ -179,7 +179,7 @@ Why this order: auth first (everything depends on it), then admin (so real users
 |------|-----------|
 | RAM pressure from argon2 or image handling | concurrency cap on hashing; no server-side image processing; 2 MiB cap; small DB pool; swap safety net |
 | Lost data (VPS failure) | off-box nightly backups of DB + `MEDIA_DIR`, tested restore |
-| Token or password leak in logs | never log bodies or `Authorization`; tests assert error responses and logs contain no secrets |
+| Token or password leak in logs | redact password/token fields in logged payloads and queries to `***`; never log `Authorization`; tests assert logs contain no secrets |
 | Weak passwords allowed (`123`) | strong brute-force limits, admin-only registration, HTTPS only |
 | Clock drift between phones affects conflict rule | 5-minute future-time rejection; equal/older handling documented; app should use network time when possible |
 | Enum lists change | app tolerates unknown values; new values added via migration + deploy |

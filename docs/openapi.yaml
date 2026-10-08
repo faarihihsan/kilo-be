@@ -1202,12 +1202,16 @@ components:
       in: query
       required: false
       description: |
-        RFC 3339 timestamp. Returns rows whose sync cursor is strictly after it,
-        including soft-deleted rows, ordered for sync. A non-RFC 3339 value is
-        400. Note: a `+` offset must be URL-encoded as `%2B`.
+        RFC 3339 timestamp, or a `yyyy-MM-dd` date meaning midnight UTC of that
+        day. Returns rows whose sync cursor is strictly after it, including
+        soft-deleted rows, ordered for sync. Any other value is 400. Sync
+        clients should send the exact `server_updated_at` they last saw, so a
+        pull does not repeat the whole day. Note: a `+` offset must be
+        URL-encoded as `%2B`.
       schema:
         type: string
-        format: date-time
+        description: RFC 3339 timestamp or `yyyy-MM-dd` date.
+        example: "2026-09-19T08:30:00Z"
     IncludeDeleted:
       name: include_deleted
       in: query
@@ -1270,18 +1274,27 @@ components:
       name: from
       in: query
       required: false
-      description: Inclusive lower bound on `started_at`.
+      description: |
+        Inclusive lower bound on `started_at`. RFC 3339 timestamp, or a
+        `yyyy-MM-dd` date meaning midnight UTC of that day. To filter by the
+        device's local day, send local midnight with its offset (URL-encode `+`
+        as `%2B`).
       schema:
         type: string
-        format: date-time
+        description: RFC 3339 timestamp or `yyyy-MM-dd` date.
+        example: "2026-09-19"
     To:
       name: to
       in: query
       required: false
-      description: Inclusive upper bound on `started_at`.
+      description: |
+        Inclusive upper bound on `started_at`. RFC 3339 timestamp, or a
+        `yyyy-MM-dd` date meaning the end of that UTC day, so `to=2026-09-19`
+        includes the whole day.
       schema:
         type: string
-        format: date-time
+        description: RFC 3339 timestamp or `yyyy-MM-dd` date.
+        example: "2026-09-19"
     PathID:
       name: id
       in: path

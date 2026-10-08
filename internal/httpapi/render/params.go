@@ -57,21 +57,46 @@ func ParseBool(r *http.Request, name string, def bool) (bool, error) {
 	return false, domain.NewValidation(name, domain.IssueInvalidFormat)
 }
 
-// ParseTimeParam reads an optional RFC 3339 timestamp query parameter
-// (`updated_since`, `from`, `to`) and returns it in UTC, or nil when the
-// parameter is absent. A value that is not RFC 3339 is a 400 bad_request, as
-// the list specs (05, 06, 08) say for "bad timestamp".
+// dateLayout is the bare-date form a time query parameter also accepts.
+const dateLayout = "2006-01-02"
+
+// ParseTimeParam reads an optional time query parameter (`updated_since`,
+// `from`) and returns it in UTC, or nil when the parameter is absent. The value
+// is an RFC 3339 timestamp or a bare yyyy-MM-dd date, which means midnight UTC
+// of that day. Anything else is a 400 bad_request, as the list specs (05, 06,
+// 08) say for "bad timestamp". Data fields (created_at, updated_at, ...) are
+// always full timestamps; only these search parameters take a date.
 //
 // Note for clients: a "+" in a UTC offset must be URL-encoded (%2B), or the
 // query string decodes it to a space.
 func ParseTimeParam(r *http.Request, name string) (*time.Time, error) {
+	return parseTimeParam(r, name, false)
+}
+
+// ParseUpperTimeParam is ParseTimeParam for an inclusive upper bound (`to`): a
+// bare date means the last microsecond of that UTC day (PostgreSQL timestamptz
+// stores microseconds), so `to=2026-09-19` includes the whole day. A full
+// timestamp is used as given.
+func ParseUpperTimeParam(r *http.Request, name string) (*time.Time, error) {
+	return parseTimeParam(r, name, true)
+}
+
+func parseTimeParam(r *http.Request, name string, endOfDay bool) (*time.Time, error) {
 	q := r.URL.Query()
 	if !q.Has(name) {
 		return nil, nil
 	}
-	t, err := time.Parse(time.RFC3339, q.Get(name))
+	s := q.Get(name)
+	t, err := time.Parse(time.RFC3339, s)
 	if err != nil {
-		return nil, domain.NewBadRequest(fmt.Sprintf("Query parameter %q must be an RFC 3339 timestamp.", name))
+		d, derr := time.Parse(dateLayout, s)
+		if derr != nil {
+			return nil, domain.NewBadRequest(fmt.Sprintf("Query parameter %q must be an RFC 3339 timestamp or a date (yyyy-MM-dd).", name))
+		}
+		t = d
+		if endOfDay {
+			t = t.Add(24*time.Hour - time.Microsecond)
+		}
 	}
 	t = t.UTC()
 	return &t, nil
