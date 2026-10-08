@@ -133,7 +133,9 @@ func TestE2ESecretsNeverInLogsOrBodies(t *testing.T) {
 	}
 	secrets = append(secrets, changedPassword)
 
-	logs.Find(t, "http request")
+	if !strings.Contains(logs.String(), `"msg":"Request = method:`) {
+		t.Fatal("no access log lines were captured; the secret checks below prove nothing")
+	}
 	logged := logs.String()
 	for _, s := range secrets {
 		if strings.Contains(logged, s) {

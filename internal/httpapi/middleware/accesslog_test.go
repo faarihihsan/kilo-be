@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,36 +13,48 @@ import (
 	"workout-tracker-be/internal/httpapi/apitest"
 )
 
+// logEntry returns the first entry whose message starts with prefix.
+func logEntry(t *testing.T, logs *apitest.Logs, prefix string) map[string]any {
+	t.Helper()
+	for _, e := range logs.Entries(t) {
+		if msg, _ := e["msg"].(string); strings.HasPrefix(msg, prefix) {
+			return e
+		}
+	}
+	t.Fatalf("no log entry with message starting %q in:\n%s", prefix, logs.String())
+	return nil
+}
+
 func TestAccessLogFields(t *testing.T) {
 	logger, logs := apitest.NewLogs()
 	h := RequestID(nil)(AccessLog(logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte("12345"))
+		_, _ = w.Write([]byte(`{"ok":true}`))
 	})))
 
-	req := httptest.NewRequest("PUT", "/v1/progress/abc", nil)
+	req := httptest.NewRequest("PUT", "/v1/progress/abc?x=1", nil)
 	req.Header.Set(RequestIDHeader, "rid-7")
 	h.ServeHTTP(httptest.NewRecorder(), req)
 
 	entries := logs.Entries(t)
-	if len(entries) != 1 {
-		t.Fatalf("got %d log lines, want 1:\n%s", len(entries), logs.String())
+	if len(entries) != 2 {
+		t.Fatalf("got %d log lines, want 2:\n%s", len(entries), logs.String())
 	}
-	e := entries[0]
-	want := map[string]any{
-		"msg": "http request", "level": "INFO", "method": "PUT", "path": "/v1/progress/abc",
-		"status": float64(201), "bytes": float64(5), "request_id": "rid-7",
+	if got := entries[0]["msg"]; got != "Request = method:PUT, uri:/v1/progress/abc?x=1" {
+		t.Errorf("request line = %v", got)
 	}
-	for k, v := range want {
-		if e[k] != v {
-			t.Errorf("%s = %v (%T), want %v", k, e[k], e[k], v)
-		}
+	if entries[0]["level"] != "INFO" || entries[0]["request_id"] != "rid-7" {
+		t.Errorf("request entry = %v", entries[0])
 	}
-	if d, ok := e["duration_ms"].(float64); !ok || d < 0 {
-		t.Errorf("duration_ms = %v", e["duration_ms"])
+	if _, ok := entries[0]["user_id"]; ok {
+		t.Errorf("anonymous request must not have user_id: %v", entries[0]["user_id"])
 	}
-	if _, ok := e["user_id"]; ok {
-		t.Errorf("anonymous request must not have user_id: %v", e["user_id"])
+	if got, _ := entries[1]["msg"].(string); !strings.HasPrefix(got, "Response = time:") || !strings.Contains(got, `Payload:{"ok":true}`) {
+		t.Errorf("response line = %v", entries[1]["msg"])
+	}
+	if entries[1]["status"] != float64(201) || entries[1]["level"] != "INFO" || entries[1]["request_id"] != "rid-7" {
+		t.Errorf("response entry = %v", entries[1])
 	}
 }
 
@@ -58,22 +71,26 @@ func TestAccessLogUserIDFromInnerAuthentication(t *testing.T) {
 	h := AccessLog(logger)(authenticate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})))
 	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/x", nil))
 
-	e := logs.Find(t, "http request")
+	e := logEntry(t, logs, "Request = method:GET, uri:/x")
 	if e["user_id"] != uid.String() {
 		t.Errorf("user_id = %v, want %s", e["user_id"], uid)
 	}
-	if e["status"] != float64(200) {
-		t.Errorf("status = %v, want 200 for a handler that wrote nothing", e["status"])
+	resp := logEntry(t, logs, "Response = time:")
+	if resp["status"] != float64(200) {
+		t.Errorf("status = %v, want 200 for a handler that wrote nothing", resp["status"])
 	}
 }
 
-func TestAccessLogNeverLogsBodiesQueriesOrCredentials(t *testing.T) {
+func TestAccessLogRedactsCredentials(t *testing.T) {
 	logger, logs := apitest.NewLogs()
 	h := AccessLog(logger)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("response-secret-body"))
+		_, _ = io.ReadAll(r.Body) // handlers read the body; that is what is captured
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"token":"response-secret-body"}`))
 	}))
-	req := httptest.NewRequest("POST", "/v1/auth/login?cursor=q-secret",
+	req := httptest.NewRequest("POST", "/v1/auth/login?password=q-secret",
 		strings.NewReader(`{"username":"alice","password":"hunter2-body-secret"}`))
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer wt_header-secret-token")
 	req.Header.Set("Cookie", "session=cookie-secret")
 	h.ServeHTTP(httptest.NewRecorder(), req)
@@ -83,6 +100,9 @@ func TestAccessLogNeverLogsBodiesQueriesOrCredentials(t *testing.T) {
 		if strings.Contains(out, secret) {
 			t.Errorf("log contains %q:\n%s", secret, out)
 		}
+	}
+	if !strings.Contains(out, `\"password\":\"***\"`) || !strings.Contains(out, `\"token\":\"***\"`) {
+		t.Errorf("secrets were not redacted:\n%s", out)
 	}
 }
 
@@ -106,7 +126,7 @@ func TestAccessLogLevelsAndPanic(t *testing.T) {
 				defer func() { _ = recover() }() // Recover is not part of this test
 				h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/x", nil))
 			}()
-			e := logs.Find(t, "http request")
+			e := logEntry(t, logs, "Response = time:")
 			if e["status"] != tc.wantStatus || e["level"] != tc.wantLevel {
 				t.Errorf("status = %v, level = %v; want %v, %s", e["status"], e["level"], tc.wantStatus, tc.wantLevel)
 			}
@@ -114,15 +134,15 @@ func TestAccessLogLevelsAndPanic(t *testing.T) {
 	}
 }
 
-func TestAccessLogRoutePattern(t *testing.T) {
+func TestAccessLogRequestURI(t *testing.T) {
 	logger, logs := apitest.NewLogs()
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/progress/{id}", func(w http.ResponseWriter, r *http.Request) {})
-	AccessLog(logger)(mux).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/v1/progress/123", nil))
+	AccessLog(logger)(mux).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/v1/progress/123?plan=abc", nil))
 
-	e := logs.Find(t, "http request")
-	if e["route"] != "GET /v1/progress/{id}" || e["path"] != "/v1/progress/123" {
-		t.Errorf("route = %v, path = %v", e["route"], e["path"])
+	e := logEntry(t, logs, "Request = method:GET")
+	if e["msg"] != "Request = method:GET, uri:/v1/progress/123?plan=abc" {
+		t.Errorf("request line = %v", e["msg"])
 	}
 }
 

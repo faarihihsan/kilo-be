@@ -193,9 +193,14 @@ func TestRouterUnknownRouteIs404JSON(t *testing.T) {
 			t.Errorf("%s: 404 without X-Request-Id", path)
 		}
 	}
-	e := logs.Entries(t)[0]
-	if e["status"] != float64(404) || e["msg"] != "http request" {
-		t.Errorf("404 not access-logged: %v", e)
+	notFound := 0
+	for _, e := range logs.Entries(t) {
+		if e["status"] == float64(404) {
+			notFound++
+		}
+	}
+	if notFound == 0 {
+		t.Errorf("no 404 response was access-logged:\n%s", logs.String())
 	}
 }
 
@@ -461,10 +466,22 @@ func TestRouterRecoversPanicsAndKeepsServing(t *testing.T) {
 	if e := logs.Find(t, "panic recovered"); e["request_id"] != "rid-panic" || !strings.Contains(e["panic"].(string), "hunter2") {
 		t.Errorf("panic log = %v", e)
 	}
-	// The access log still gets its line, as a 500, with the user.
-	e := logs.Find(t, "http request")
-	if e["status"] != float64(500) || e["request_id"] != "rid-panic" || e["user_id"] != uid.String() || e["route"] != "PUT /v1/progress/{id}" {
-		t.Errorf("access log = %v", e)
+	// The access log still gets its lines, as a 500, with the user.
+	var reqEntry, respEntry map[string]any
+	for _, e := range logs.Entries(t) {
+		msg, _ := e["msg"].(string)
+		switch {
+		case strings.HasPrefix(msg, "Request = method:PUT"):
+			reqEntry = e
+		case strings.HasPrefix(msg, "Response = time:"):
+			respEntry = e
+		}
+	}
+	if reqEntry == nil || reqEntry["request_id"] != "rid-panic" || reqEntry["user_id"] != uid.String() {
+		t.Errorf("access request log = %v", reqEntry)
+	}
+	if respEntry == nil || respEntry["status"] != float64(500) || respEntry["level"] != "ERROR" {
+		t.Errorf("access response log = %v", respEntry)
 	}
 
 	apitest.RequireError(t, do(router, "GET", "/v1/progress", "user"), 501, "not_implemented")
@@ -492,14 +509,17 @@ func TestRouterRequestIDAndAccessLog(t *testing.T) {
 	}
 
 	entries := logs.Entries(t)
-	if len(entries) != 2 {
+	if len(entries) != 4 {
 		t.Fatalf("got %d log lines:\n%s", len(entries), logs.String())
 	}
-	if entries[0]["request_id"] != generated || entries[0]["status"] != float64(501) || entries[0]["route"] != "GET /v1/progress" {
-		t.Errorf("first entry = %v", entries[0])
+	if entries[0]["request_id"] != generated || entries[0]["msg"] != "Request = method:GET, uri:/v1/progress" {
+		t.Errorf("first request = %v", entries[0])
 	}
-	if entries[1]["request_id"] != "client-id-1" || entries[1]["method"] != "POST" || entries[1]["path"] != "/v1/auth/login" {
-		t.Errorf("second entry = %v", entries[1])
+	if entries[1]["request_id"] != generated || entries[1]["status"] != float64(501) {
+		t.Errorf("first response = %v", entries[1])
+	}
+	if entries[2]["request_id"] != "client-id-1" || entries[2]["msg"] != "Request = method:POST, uri:/v1/auth/login?password=***" {
+		t.Errorf("second request = %v", entries[2])
 	}
 	for _, secret := range []string{"q-secret", "body-secret", "header-secret", "Bearer"} {
 		if strings.Contains(logs.String(), secret) {

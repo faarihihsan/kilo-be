@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"workout-tracker-be/internal/config"
+	"workout-tracker-be/internal/logging"
 	"workout-tracker-be/internal/store"
 )
 
@@ -15,11 +16,12 @@ import (
 // so a wrong host fails within seconds instead of hanging the deploy.
 const startupTimeout = 30 * time.Second
 
-// newLogger returns the JSON logger of the process (docs/implementation-plan.md
-// section 1). serve logs to stdout, journald and Docker collect it; subcommands
-// log to stderr and keep stdout for their output.
+// newLogger returns the text logger of the process (docs/implementation-plan.md
+// section 1): one line per event, "<time> trace-id=<id> <LEVEL> <message>".
+// serve logs to stdout, journald and Docker collect it; subcommands log to
+// stderr and keep stdout for their output.
 func newLogger(w io.Writer, level slog.Level) *slog.Logger {
-	return slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{Level: level}))
+	return logging.New(w, level)
 }
 
 // openDB opens the connection pool for cfg and checks that the schema is

@@ -12,6 +12,7 @@ type responseRecorder struct {
 	status      int
 	bytes       int64
 	wroteHeader bool
+	cap         *captureWriter
 }
 
 // recordResponse returns w as a *responseRecorder, reusing it when an outer
@@ -20,8 +21,11 @@ func recordResponse(w http.ResponseWriter) *responseRecorder {
 	if rec, ok := w.(*responseRecorder); ok {
 		return rec
 	}
-	return &responseRecorder{ResponseWriter: w}
+	return &responseRecorder{ResponseWriter: w, cap: newCaptureWriter(maxLoggedPayload)}
 }
+
+// body returns the bytes captured for logging, up to maxLoggedPayload.
+func (r *responseRecorder) body() *captureWriter { return r.cap }
 
 func (r *responseRecorder) WriteHeader(code int) {
 	// 1xx responses are interim; the final status comes later.
@@ -39,6 +43,9 @@ func (r *responseRecorder) Write(b []byte) (int, error) {
 	}
 	n, err := r.ResponseWriter.Write(b)
 	r.bytes += int64(n)
+	if r.cap != nil {
+		_, _ = r.cap.Write(b[:n])
+	}
 	return n, err
 }
 

@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"workout-tracker-be/internal/httpapi/render"
+	"workout-tracker-be/internal/logging"
 )
 
 // RequestIDHeader carries the request id, inbound and outbound.
@@ -34,6 +35,9 @@ func RequestID(logger *slog.Logger) func(http.Handler) http.Handler {
 			}
 			w.Header().Set(RequestIDHeader, id)
 			ctx := context.WithValue(r.Context(), requestIDKey{}, id)
+			// The trace id makes every log line written with this context
+			// show the same trace-id, whatever logger is used.
+			ctx = logging.WithTraceID(ctx, id)
 			ctx = render.WithLogger(ctx, logger.With(slog.String("request_id", id)))
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
